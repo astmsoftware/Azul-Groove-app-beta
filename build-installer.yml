@@ -1,0 +1,56 @@
+name: Gerar instalador do Azul Groove
+
+# Roda sozinho a cada push na branch principal, ao criar uma tag v* (ex.: v1.0.0)
+# ou manualmente pela aba Actions -> "Run workflow".
+on:
+  push:
+    branches: [main, master]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write   # necessário para publicar na aba Releases
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Baixar o código
+        uses: actions/checkout@v4
+
+      - name: Instalar .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Gerar o app (.exe)
+        run: dotnet publish -c Release -o publish
+
+      - name: Instalar o Inno Setup (versão mais nova)
+        run: choco install innosetup -y --no-progress
+
+      - name: Gerar o instalador (com as animações)
+        shell: cmd
+        run: |
+          set "ISCC=%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe"
+          if not exist "%ISCC%" set "ISCC=%ProgramFiles%\Inno Setup 6\ISCC.exe"
+          "%ISCC%" AzulGroove.iss
+
+      - name: Juntar os arquivos finais
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item installer\AzulGroove-Setup.exe dist\AzulGroove-Setup.exe
+          Copy-Item publish\AzulGroove.exe dist\AzulGroove-Portable.exe
+
+      - name: Guardar os arquivos (aba Actions -> Artifacts)
+        uses: actions/upload-artifact@v4
+        with:
+          name: AzulGroove
+          path: dist/*
+
+      - name: Publicar na aba Releases (só quando for tag v*)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
