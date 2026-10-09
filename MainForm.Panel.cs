@@ -411,8 +411,8 @@ public partial class MainForm
 
     const string PanelHtml = """
 <!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="color-scheme" content="dark light"><title>Azul Groove · Painel</title><style>
-:root{--bg:#0f1117;--card:#181b25;--line:#272c3b;--tx:#f2f4ff;--mu:#9aa3b2;--ac:#5865f2;--ac2:#7a5cff}
-@media (prefers-color-scheme:light){:root{--bg:#f4f6fb;--card:#fff;--line:#e0e4ef;--tx:#14161a;--mu:#646b78}}
+:root{--bg:#0f1117;--card:#181b25;--line:#272c3b;--tx:#f2f4ff;--mu:#9aa3b2;--ac:#5865f2;--ac2:#7a5cff;color-scheme:dark}
+@media (prefers-color-scheme:light){:root{--bg:#f4f6fb;--card:#fff;--line:#e0e4ef;--tx:#14161a;--mu:#646b78;color-scheme:light}}
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:var(--bg);color:var(--tx);font-family:"Segoe UI",system-ui,sans-serif;padding:26px clamp(16px,4vw,44px) 50px;line-height:1.5}
 .w{max-width:880px;margin:0 auto}
@@ -433,7 +433,19 @@ h2{font-size:.78rem;letter-spacing:1.2px;text-transform:uppercase;color:var(--ac
 .seg{display:flex;border:1px solid var(--line);border-radius:10px;overflow:hidden}
 .seg button{background:none;border:0;color:var(--mu);padding:7px 13px;cursor:pointer;font:inherit;font-size:.88rem}
 .seg button.on{background:var(--ac);color:#fff}
-select{background:var(--bg);color:var(--tx);border:1px solid var(--line);border-radius:9px;padding:7px 10px;font:inherit;font-size:.88rem}
+.dd{position:relative;min-width:190px}
+.ddb{width:100%;text-align:left;background:var(--bg);color:var(--tx);border:1px solid var(--line);border-radius:10px;padding:8px 34px 8px 12px;font:inherit;font-size:.88rem;cursor:pointer;position:relative;transition:.15s}
+.ddb:hover,.dd.open .ddb{border-color:var(--ac)}
+.ddb::after{content:"";position:absolute;right:14px;top:50%;width:7px;height:7px;border-right:2px solid var(--mu);border-bottom:2px solid var(--mu);transform:translateY(-70%) rotate(45deg);transition:.2s}
+.dd.open .ddb::after{transform:translateY(-30%) rotate(225deg)}
+.ddl{display:none;position:absolute;right:0;top:calc(100% + 6px);min-width:100%;z-index:20;padding:5px;border-radius:12px;background:var(--card);border:1px solid var(--line);box-shadow:0 16px 40px rgba(0,0,0,.35)}
+.dd.open .ddl{display:block}
+.ddo{padding:8px 12px;border-radius:8px;cursor:pointer;font-size:.88rem;white-space:nowrap}
+.ddo:hover{background:rgba(109,124,255,.18)}.ddo.sel{background:var(--ac);color:#fff}
+.in{background:var(--bg);color:var(--tx);border:1px solid var(--line);border-radius:10px;padding:8px 12px;font:inherit;font-size:.88rem;min-width:200px;outline:none;transition:.15s}
+.in:focus{border-color:var(--ac);box-shadow:0 0 0 3px rgba(88,101,242,.25)}
+.btn.dg{background:#d9455b}.btn:disabled{opacity:.5;cursor:default}
+#az-st{display:none;margin-top:10px;color:var(--mu);font-size:.92rem}
 .sw{position:relative;width:44px;height:25px;flex:none}.sw input{opacity:0;width:100%;height:100%;position:absolute;cursor:pointer;z-index:2}
 .sw span{position:absolute;inset:0;background:var(--line);border-radius:25px;transition:.2s}
 .sw span:before{content:"";position:absolute;left:3px;top:3px;width:19px;height:19px;border-radius:50%;background:#fff;transition:.2s}
@@ -496,6 +508,17 @@ $('#preset').onchange=e=>send('panel:set:preset:'+e.target.value);
 $('#start').onchange=e=>send('panel:set:start:'+e.target.value);
 $('#data').onclick=()=>send('panel:data');
 const el=(t,c,x)=>{const e=document.createElement(t);if(c)e.className=c;if(x!=null)e.textContent=x;return e};
+// Lista suspensa própria (a lista nativa do Windows ignora o tema escuro). Usada também pelo bloco Beta.
+function ddify(sel){
+ sel.style.display='none';
+ const w=el('div','dd'),b=el('button','ddb'),l=el('div','ddl');b.type='button';w.appendChild(b);w.appendChild(l);sel.after(w);
+ const sync=()=>{l.textContent='';Array.from(sel.options).forEach(o=>{const d=el('div','ddo'+(o.value===sel.value?' sel':''),o.textContent);
+  d.onclick=ev=>{ev.stopPropagation();sel.value=o.value;w.classList.remove('open');sync();sel.dispatchEvent(new Event('change'))};l.appendChild(d)});
+  const cur=sel.options[sel.selectedIndex];b.textContent=cur?cur.textContent:''};
+ b.onclick=ev=>{ev.stopPropagation();const open=w.classList.contains('open');document.querySelectorAll('.dd.open').forEach(x=>x.classList.remove('open'));w.classList.toggle('open',!open)};
+ sel.sync=sync;sync();return w}
+document.addEventListener('click',()=>document.querySelectorAll('.dd.open').forEach(x=>x.classList.remove('open')));
+ddify($('#preset'));ddify($('#start'));
 document.querySelectorAll('[data-md]').forEach(b=>b.onclick=()=>openMd(b.dataset.md));
 function openMd(mode){$('#mt').textContent=mode==='news'?'🆕 Novidades do app':'⬇️ Baixar versões';$('#ml').textContent='Carregando...';$('#md').hidden=false;send('panel:'+mode)}
 $('#mx').onclick=()=>$('#md').hidden=true;
@@ -515,8 +538,8 @@ function showRel(d){const box=$('#ml');box.textContent='';
   box.appendChild(c)})}
 $('#chk').onclick=()=>{$('#chk').disabled=true;$('#upd').textContent='Verificando...';send('panel:update')};
 chrome.webview.addEventListener('message',e=>{const d=e.data;
- if(d.type==='state'){$('#ver').textContent=$('#ver2').textContent=d.version;mark(d.theme);$('#hk').checked=d.hotkeyOn;$('#tray').checked=d.tray;$('#start').value=d.start;if(d.news)openMd('news');
-  $('#preset').innerHTML=d.presets.map((p,i)=>'<option value="'+i+'">'+p+'</option>').join('');$('#preset').value=d.preset;
+ if(d.type==='state'){$('#ver').textContent=$('#ver2').textContent=d.version;mark(d.theme);$('#hk').checked=d.hotkeyOn;$('#tray').checked=d.tray;$('#start').value=d.start;$('#start').sync();if(d.news)openMd('news');
+  $('#preset').innerHTML=d.presets.map((p,i)=>'<option value="'+i+'">'+p+'</option>').join('');$('#preset').value=d.preset;$('#preset').sync();
   $('#hkinfo').textContent=!d.hotkeyOn?'':d.hotkeyOk?'Ativo: '+d.hotkeyLabel:'⚠️ Outro programa já usa esta combinação. Escolha outra.'}
  if(d.type==='progress'){$('#upd').innerHTML='⬇️ Baixando a atualização… <b>'+d.percent+'%</b>'}
  if(d.type==='restart'){$('#upd').textContent='';$('#rs').hidden=false;let s=d.seconds;$('#cd').textContent=s;const t=setInterval(()=>{s--;$('#cd').textContent=Math.max(s,0);if(s<=0)clearInterval(t)},1000)}

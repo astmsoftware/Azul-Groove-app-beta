@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using D2 = System.Drawing.Drawing2D;
 using System.Text.Json;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
@@ -115,11 +116,13 @@ public partial class MainForm : Form
 
         menu.Items.AddRange(new ToolStripItem[]
         {
+            new ToolStripMenuItem("Azul Groove  ·  " + AppVersion) { Enabled = false }, new ToolStripSeparator(),
             miChat, miPanel, miHome, new ToolStripSeparator(),
-            miTheme, miHotkeyOn, miKeys, miTray, new ToolStripSeparator(), miExit
+            miTheme, miHotkeyOn, miKeys, miTray, OfflineMenuItem(), new ToolStripSeparator(),
+            miExit
         });
 
-        tray = new NotifyIcon { Icon = Icon ?? SystemIcons.Application, Text = "Azul Groove", Visible = true, ContextMenuStrip = menu };
+        tray = new NotifyIcon { Icon = Icon ?? SystemIcons.Application, Text = "Azul Groove Beta " + AppVersion, Visible = true, ContextMenuStrip = menu };
         tray.DoubleClick += (_, _) => ShowChat();
         ApplyMenuTheme(cfg.Theme == 1 ? false : cfg.Theme == 2 ? true : WindowsIsDark());
         UpdateLabels();
@@ -150,7 +153,7 @@ public partial class MainForm : Form
         {
             it.BackColor = bg;
             it.ForeColor = fg;
-            it.Padding = new Padding(4, 5, 4, 5);
+            it.Padding = new Padding(6, 6, 6, 6);
             if (it is ToolStripMenuItem mi && mi.HasDropDownItems)
                 StyleMenu(mi.DropDown, renderer, bg, fg);
         }
@@ -190,14 +193,54 @@ public partial class MainForm : Form
     sealed class MenuRenderer : ToolStripProfessionalRenderer
     {
         readonly bool dark;
-        readonly Color fg, dim, accent;
+        readonly Color fg, dim, accent, hover, line;
         public MenuRenderer(bool dark) : base(new MenuColors(dark))
         {
             this.dark = dark;
             fg = dark ? Color.FromArgb(235, 238, 247) : Color.FromArgb(28, 32, 48);
             dim = dark ? Color.FromArgb(120, 126, 150) : Color.FromArgb(150, 155, 175);
             accent = Color.FromArgb(125, 140, 255);
+            hover = dark ? Color.FromArgb(46, 52, 80) : Color.FromArgb(224, 229, 250);
+            line = dark ? Color.FromArgb(52, 57, 75) : Color.FromArgb(208, 213, 228);
             RoundedEdges = false;
+        }
+
+        static D2.GraphicsPath RoundRect(Rectangle r, int d)
+        {
+            var p = new D2.GraphicsPath();
+            p.AddArc(r.X, r.Y, d, d, 180, 90);
+            p.AddArc(r.Right - d, r.Y, d, d, 270, 90);
+            p.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90);
+            p.AddArc(r.X, r.Bottom - d, d, d, 90, 90);
+            p.CloseFigure();
+            return p;
+        }
+
+        // Item selecionado = pílula arredondada (em vez do retângulo reto)
+        protected override void OnRenderMenuItemBackground(ToolStripItemRenderEventArgs e)
+        {
+            if (!e.Item.Selected || !e.Item.Enabled) return;
+            var g = e.Graphics;
+            g.SmoothingMode = D2.SmoothingMode.AntiAlias;
+            using var path = RoundRect(new Rectangle(4, 1, e.Item.Width - 9, e.Item.Height - 3), 8);
+            using var br = new SolidBrush(hover);
+            g.FillPath(br, path);
+        }
+
+        protected override void OnRenderSeparator(ToolStripSeparatorRenderEventArgs e)
+        {
+            int y = e.Item.Height / 2;
+            using var pen = new Pen(line);
+            e.Graphics.DrawLine(pen, 14, y, e.Item.Width - 14, y);
+        }
+
+        protected override void OnRenderToolStripBorder(ToolStripRenderEventArgs e)
+        {
+            var g = e.Graphics;
+            g.SmoothingMode = D2.SmoothingMode.AntiAlias;
+            using var pen = new Pen(line);
+            using var path = RoundRect(new Rectangle(0, 0, e.ToolStrip.Width - 1, e.ToolStrip.Height - 1), 10);
+            g.DrawPath(pen, path);
         }
 
         protected override void OnRenderItemText(ToolStripItemTextRenderEventArgs e)
@@ -304,6 +347,7 @@ public partial class MainForm : Form
             }
             return;
         }
+        OfflineShutdown();
         tray.Visible = false;
         tray.Dispose();
         base.OnFormClosing(e);
@@ -343,7 +387,15 @@ public partial class MainForm : Form
         // 20 = Windows 10 20H1+ e Windows 11; 19 = Windows 10 mais antigo
         if (DwmSetWindowAttribute(Handle, 20, ref v, sizeof(int)) != 0)
             DwmSetWindowAttribute(Handle, 19, ref v, sizeof(int));
+        // Windows 11: barra de título, texto e borda combinando com o fundo do app (no Windows 10 é ignorado)
+        int cap = ToColorRef(BackColor);
+        int txt = ToColorRef(dark ? Color.FromArgb(235, 238, 247) : Color.FromArgb(28, 32, 48));
+        DwmSetWindowAttribute(Handle, 35, ref cap, sizeof(int)); // DWMWA_CAPTION_COLOR
+        DwmSetWindowAttribute(Handle, 36, ref txt, sizeof(int)); // DWMWA_TEXT_COLOR
+        DwmSetWindowAttribute(Handle, 34, ref cap, sizeof(int)); // DWMWA_BORDER_COLOR
     }
+
+    static int ToColorRef(Color c) => c.R | (c.G << 8) | (c.B << 16);
 
     // Aplica a escolha do menu (Automático / Claro / Escuro)
     void ApplyThemeMode(bool pushToSite)
@@ -393,94 +445,91 @@ public partial class MainForm : Form
     }
 
     // ================= Animação de abertura =================
-    const string SplashHtml = """
-<!doctype html><html><head><meta charset="utf-8"><meta name="color-scheme" content="dark light"><style>
-:root{--bg:#0f1117;--tx:#fff;--mu:#9aa3b2}
-@media (prefers-color-scheme:light){:root{--bg:#f4f6fb;--tx:#14161a;--mu:#646b78}}
-html,body{height:100%;margin:0;background:var(--bg);overflow:hidden;font-family:"Segoe UI",system-ui,sans-serif}
-body{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:24px}
-.logo{width:132px;height:132px;border-radius:34px;background:linear-gradient(135deg,#5865f2,#7a5cff);display:flex;align-items:center;justify-content:center;gap:9px;box-shadow:0 20px 60px rgba(88,101,242,.55);animation:pop .8s cubic-bezier(.2,1.4,.4,1) both,glow 2s ease-in-out .8s infinite}
-.logo i{display:block;width:12px;height:40px;border-radius:6px;background:#fff;animation:eq 1s ease-in-out infinite}
+    // CSS compartilhado pelas 3 animações (normal, pós-atualização e primeira instalação): fundo "aurora" + logo de vidro
+    const string SplashHead = "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"color-scheme\" content=\"dark light\"><style>";
+    const string SplashCss = """
+:root{--bg:#0f1117;--tx:#fff;--mu:#9aa3b2;--ac:#6d7cff;--ac2:#9a6bff;--bl:.55}
+@media (prefers-color-scheme:light){:root{--bg:#f2f4fb;--tx:#14161a;--mu:#646b78;--bl:.38}}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;background:var(--bg);overflow:hidden;font-family:"Segoe UI Variable","Segoe UI",system-ui,sans-serif}
+.aur{position:fixed;inset:0;overflow:hidden}
+.aur i{position:absolute;border-radius:50%;filter:blur(90px);opacity:var(--bl);will-change:transform}
+.aur i:nth-child(1){width:520px;height:520px;left:-140px;top:-160px;background:#5865f2;animation:d1 14s ease-in-out infinite alternate}
+.aur i:nth-child(2){width:460px;height:460px;right:-120px;top:-40px;background:#b45cff;animation:d2 17s ease-in-out infinite alternate}
+.aur i:nth-child(3){width:480px;height:480px;left:25%;bottom:-240px;background:#1fa8ff;animation:d3 20s ease-in-out infinite alternate}
+@keyframes d1{to{transform:translate(220px,160px) scale(1.2)}}
+@keyframes d2{to{transform:translate(-240px,200px) scale(.85)}}
+@keyframes d3{to{transform:translate(180px,-180px) scale(1.15)}}
+.stage{position:relative;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:22px}
+.stage.big{gap:34px}
+.logo{width:120px;height:120px;border-radius:32px;background:linear-gradient(135deg,#5865f2,#7a5cff);display:flex;align-items:center;justify-content:center;gap:8px;box-shadow:inset 0 1px 0 rgba(255,255,255,.35),0 22px 64px rgba(88,101,242,.55);animation:pop .8s cubic-bezier(.2,1.4,.4,1) both,glow 2.4s ease-in-out .8s infinite}
+.logo.s{scale:.8}
+.logo i{display:block;width:10px;height:34px;border-radius:6px;background:#fff;animation:eq 1s ease-in-out infinite}
 .logo i:nth-child(1){animation-delay:-.9s}.logo i:nth-child(2){animation-delay:-.65s}.logo i:nth-child(3){animation-delay:-.4s}.logo i:nth-child(4){animation-delay:-.75s}.logo i:nth-child(5){animation-delay:-.2s}
-h1{margin:0;color:var(--tx);font-size:34px;letter-spacing:.5px;animation:up .8s .35s both}
-p{margin:0;color:var(--mu);animation:up .8s .55s both}
-.bar{width:180px;height:4px;border-radius:4px;background:rgba(127,127,127,.25);overflow:hidden;animation:up .8s .7s both}
-.bar b{display:block;height:100%;width:40%;border-radius:4px;background:linear-gradient(90deg,#5865f2,#7a5cff);animation:slide 1.1s ease-in-out infinite}
-@keyframes pop{from{transform:scale(.3) rotate(-12deg);opacity:0}to{transform:none;opacity:1}}
-@keyframes eq{0%,100%{height:18px}50%{height:64px}}
-@keyframes glow{50%{box-shadow:0 20px 90px rgba(122,92,255,.85)}}
-@keyframes up{from{transform:translateY(14px);opacity:0}to{transform:none;opacity:1}}
-@keyframes slide{from{transform:translateX(-110%)}to{transform:translateX(260%)}}
-@media (prefers-reduced-motion:reduce){*{animation-duration:.01s!important;animation-iteration-count:1!important}}
-</style></head><body><div class="logo"><i></i><i></i><i></i><i></i><i></i></div><h1>Azul Groove</h1><p>Carregando…</p><div class="bar"><b></b></div></body></html>
-""";
-
-    // Animação mostrada na primeira abertura depois de uma atualização
-    const string UpdateSplashHtml = """
-<!doctype html><html><head><meta charset="utf-8"><meta name="color-scheme" content="dark light"><style>
-:root{--bg:#0f1117;--tx:#fff;--mu:#9aa3b2}
-@media (prefers-color-scheme:light){:root{--bg:#f4f6fb;--tx:#14161a;--mu:#646b78}}
-html,body{height:100%;margin:0;background:var(--bg);overflow:hidden;font-family:"Segoe UI",system-ui,sans-serif}
-body{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px}
-.logo{width:120px;height:120px;border-radius:32px;background:linear-gradient(135deg,#5865f2,#7a5cff);display:flex;align-items:center;justify-content:center;gap:8px;box-shadow:0 20px 60px rgba(88,101,242,.55);animation:pop .8s cubic-bezier(.2,1.4,.4,1) both,glow 2s ease-in-out .8s infinite}
-.logo i{display:block;width:11px;height:36px;border-radius:6px;background:#fff;animation:eq 1s ease-in-out infinite}
-.logo i:nth-child(1){animation-delay:-.9s}.logo i:nth-child(2){animation-delay:-.65s}.logo i:nth-child(3){animation-delay:-.4s}.logo i:nth-child(4){animation-delay:-.75s}.logo i:nth-child(5){animation-delay:-.2s}
-h1{margin:0;color:var(--tx);font-size:32px;animation:up .8s .3s both}
-.v{color:var(--tx);font-size:18px;font-weight:600;padding:5px 16px;border-radius:30px;background:rgba(88,101,242,.25);animation:up .8s .5s both}
+h1{margin:0;color:var(--tx);font-size:32px;font-weight:600;letter-spacing:.4px;animation:up .8s .3s both}
+.mu{margin:0;color:var(--mu);animation:up .8s .5s both}
+.chip{color:var(--tx);font-size:17px;font-weight:600;padding:5px 16px;border-radius:30px;background:rgba(109,124,255,.25);animation:up .8s .5s both}
+.bar{width:200px;height:5px;border-radius:5px;background:rgba(127,127,127,.25);overflow:hidden;animation:up .8s .7s both}
+.bar b{display:block;height:100%;border-radius:5px;background:linear-gradient(90deg,var(--ac),var(--ac2))}
+.bar .ind{width:40%;animation:slide 1.1s ease-in-out infinite}
+.bar .fill{width:0;animation:fill 2.6s .4s ease-in-out forwards}
 .tx{display:grid;text-align:center;animation:up .8s .6s both}
 .tx p{grid-area:1/1;margin:0;color:var(--mu)}
 .t1{animation:hide .3s 2.7s forwards}
 .t2{opacity:0;color:var(--tx)!important;font-weight:600;animation:show .5s 2.9s forwards}
-.bar{width:200px;height:5px;border-radius:5px;background:rgba(127,127,127,.25);overflow:hidden;animation:up .8s .7s both}
-.bar b{display:block;height:100%;width:0;border-radius:5px;background:linear-gradient(90deg,#5865f2,#7a5cff);animation:fill 2.6s .4s ease-in-out forwards}
-@keyframes pop{from{transform:scale(.3) rotate(-12deg);opacity:0}to{transform:none;opacity:1}}
-@keyframes eq{0%,100%{height:16px}50%{height:58px}}
-@keyframes glow{50%{box-shadow:0 20px 90px rgba(122,92,255,.85)}}
-@keyframes up{from{transform:translateY(14px);opacity:0}to{transform:none;opacity:1}}
-@keyframes fill{to{width:100%}}
-@keyframes hide{to{opacity:0}}
-@keyframes show{to{opacity:1}}
-@media (prefers-reduced-motion:reduce){*{animation-duration:.01s!important;animation-delay:0s!important;animation-iteration-count:1!important}}
-</style></head><body><div class="logo"><i></i><i></i><i></i><i></i><i></i></div><h1>Azul Groove</h1><div class="v">@FROM@ → @TO@</div>
-<div class="tx"><p class="t1">Finalizando a atualização…</p><p class="t2">✅ Atualizado! Você está na versão @TO@</p></div><div class="bar"><b></b></div></body></html>
-""";
-
-    // Animação mostrada só na primeira instalação (estilo "configuração" do Windows 11)
-    const string SetupSplashHtml = """
-<!doctype html><html><head><meta charset="utf-8"><meta name="color-scheme" content="dark light"><style>
-:root{--bg:#0f1117;--tx:#fff;--mu:#9aa3b2}
-@media (prefers-color-scheme:light){:root{--bg:#f4f6fb;--tx:#14161a;--mu:#646b78}}
-html,body{height:100%;margin:0;background:var(--bg);overflow:hidden;font-family:"Segoe UI",system-ui,sans-serif}
-body{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:34px}
-.logo{width:96px;height:96px;border-radius:26px;background:linear-gradient(135deg,#5865f2,#7a5cff);display:flex;align-items:center;justify-content:center;gap:7px;box-shadow:0 16px 50px rgba(88,101,242,.5);animation:pop .8s cubic-bezier(.2,1.4,.4,1) both}
-.logo i{display:block;width:9px;height:30px;border-radius:5px;background:#fff;animation:eq 1s ease-in-out infinite}
-.logo i:nth-child(1){animation-delay:-.9s}.logo i:nth-child(2){animation-delay:-.65s}.logo i:nth-child(3){animation-delay:-.4s}.logo i:nth-child(4){animation-delay:-.75s}.logo i:nth-child(5){animation-delay:-.2s}
-.msgs{position:relative;width:420px;height:44px;text-align:center}
+.msgs{position:relative;width:min(420px,90vw);height:44px;text-align:center}
 .msgs p{position:absolute;inset:0;margin:0;opacity:0;color:var(--tx);font-size:26px;font-weight:300;letter-spacing:.3px}
 .m1{animation:msg 1.6s .5s both}.m2{animation:msg 1.6s 2.1s both}.m3{animation:msg 1.6s 3.7s both}
 .m4{animation:last .6s 5.3s forwards;font-weight:600!important}
 .dots{display:flex;gap:10px;height:12px;animation:up .6s .3s both}
 .dots b{width:8px;height:8px;border-radius:50%;background:var(--tx);animation:orbit 1.2s ease-in-out infinite}
 .dots b:nth-child(2){animation-delay:.15s}.dots b:nth-child(3){animation-delay:.3s}.dots b:nth-child(4){animation-delay:.45s}
-.done .dots{display:none}
 .sub{color:var(--mu);font-size:13px;margin:0;animation:up .8s .6s both}
 @keyframes pop{from{transform:scale(.3) rotate(-12deg);opacity:0}to{transform:none;opacity:1}}
-@keyframes eq{0%,100%{height:14px}50%{height:50px}}
+@keyframes eq{0%,100%{height:14px}50%{height:56px}}
+@keyframes glow{50%{box-shadow:inset 0 1px 0 rgba(255,255,255,.35),0 22px 96px rgba(122,92,255,.85)}}
 @keyframes up{from{transform:translateY(14px);opacity:0}to{transform:none;opacity:1}}
+@keyframes slide{from{transform:translateX(-110%)}to{transform:translateX(260%)}}
+@keyframes fill{to{width:100%}}
+@keyframes hide{to{opacity:0}}
+@keyframes show{to{opacity:1}}
 @keyframes msg{0%{opacity:0;transform:translateY(10px)}20%,80%{opacity:1;transform:none}100%{opacity:0;transform:translateY(-10px)}}
 @keyframes last{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
 @keyframes orbit{0%,100%{transform:translateY(0);opacity:.35}50%{transform:translateY(-8px);opacity:1}}
-@media (prefers-reduced-motion:reduce){*{animation-duration:.01s!important;animation-iteration-count:1!important}}
-</style></head><body><div class="logo"><i></i><i></i><i></i><i></i><i></i></div>
-<div class="msgs"><p class="m1">Olá!</p><p class="m2">Estamos preparando tudo para você</p><p class="m3">Quase lá…</p><p class="m4">Tudo pronto!</p></div>
-<div class="dots"><b></b><b></b><b></b><b></b></div><p class="sub">Primeira configuração do Azul Groove</p></body></html>
+@media (prefers-reduced-motion:reduce){*{animation-duration:.01s!important;animation-delay:0s!important;animation-iteration-count:1!important}}
 """;
+    const string SplashAurora = "<div class=\"aur\"><i></i><i></i><i></i></div>";
+    const string SplashLogo = "<div class=\"logo\"><i></i><i></i><i></i><i></i><i></i></div>";
+
+    const string SplashHtml = SplashHead + SplashCss + "</style></head><body>" + SplashAurora +
+        "<div class=\"stage\">" + SplashLogo + "<h1>Azul Groove</h1><p class=\"mu\">Carregando…</p><div class=\"bar\"><b class=\"ind\"></b></div></div></body></html>";
+
+    // Animação mostrada na primeira abertura depois de uma atualização
+    const string UpdateSplashHtml = SplashHead + SplashCss + "</style></head><body>" + SplashAurora +
+        "<div class=\"stage\">" + SplashLogo + "<h1>Azul Groove</h1><div class=\"chip\">@FROM@ → @TO@</div>" +
+        "<div class=\"tx\"><p class=\"t1\">Finalizando a atualização…</p><p class=\"t2\">✅ Atualizado! Você está na versão @TO@</p></div>" +
+        "<div class=\"bar\"><b class=\"fill\"></b></div></div></body></html>";
+
+    // Animação mostrada só na primeira instalação (estilo "configuração" do Windows 11)
+    const string SetupSplashHtml = SplashHead + SplashCss + "</style></head><body>" + SplashAurora +
+        "<div class=\"stage big\"><div class=\"logo s\"><i></i><i></i><i></i><i></i><i></i></div>" +
+        "<div class=\"msgs\"><p class=\"m1\">Olá!</p><p class=\"m2\">Estamos preparando tudo para você</p><p class=\"m3\">Quase lá…</p><p class=\"m4\">Tudo pronto!</p></div>" +
+        "<div class=\"dots\"><b></b><b></b><b></b><b></b></div><p class=\"sub\">Primeira configuração do Azul Groove</p></div></body></html>";
 
     async Task PlaySplashAsync()
     {
         var upd = ConsumeUpdateMarker(); // existe se o app acabou de ser atualizado pelo próprio painel
         int wait = 2300;
-        if (upd != null)
+        if (!cfg.SetupDone)
+        {
+            // Beta: primeira abertura -> aparece SÓ o assistente de configuração (na própria janela do app);
+            // quando termina, segue para a animação e abre o app normalmente.
+            await BetaRunSetupAsync();
+            if (IsDisposed) return;
+            web.CoreWebView2.NavigateToString(SplashHtml);
+            wait = 1500;
+        }
+        else if (upd != null)
         {
             justUpdated = true;
             wait = 4300;
@@ -498,7 +547,9 @@ body{display:flex;flex-direction:column;align-items:center;justify-content:cente
         try { await web.CoreWebView2.ExecuteScriptAsync("document.body.style.transition='opacity .35s';document.body.style.opacity=0"); } catch { }
         await Task.Delay(380);
         if (skipSplash || IsDisposed) return;
+        betaGreetPending = true; // Beta: mostra "Olá, Nome!" quando a próxima página terminar de carregar
         if (justUpdated) ShowPanel(); // depois de atualizar, abre o painel e mostra as novidades
+        else if (cfg.StartPage != 0 && IsOffline) ShowOfflinePage(cfg.StartPage == 2 ? ChatUrl : HomeUrl);
         else GoStart();
     }
 
@@ -516,7 +567,7 @@ body{display:flex;flex-direction:column;align-items:center;justify-content:cente
             if (!ok)
             {
                 var r = MessageBox.Show(
-                    "Não foi possível iniciar o WebView2 Runtime.\n\nDeseja abrir a página de download?",
+                    "Não foi possível iniciar o WebView2 Runtime.\n\nSem internet? Coloque o instalador offline (MicrosoftEdgeWebView2RuntimeInstallerX64.exe) ou a pasta WebView2Runtime ao lado do app.\n\nDeseja abrir a página de download?",
                     "Azul Groove", MessageBoxButtons.YesNo, MessageBoxIcon.Error);
                 if (r == DialogResult.Yes)
                     OpenExternal("https://developer.microsoft.com/microsoft-edge/webview2/");
@@ -536,8 +587,13 @@ body{display:flex;flex-direction:column;align-items:center;justify-content:cente
         ApplyThemeMode(pushToSite: false);
         web.CoreWebView2.NavigationCompleted += (_, _) => { if (pendingSitePref) _ = PushSiteThemeAsync(); };
         await web.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync(ThemeScript);
+        web.CoreWebView2.NavigationCompleted += (_, _) => { BetaOnNavigationCompleted(); };
+        web.CoreWebView2.NavigationCompleted += OfflineOnNavigationCompleted;
+        OfflineInit();
         web.CoreWebView2.WebMessageReceived += (_, e) =>
         {
+            if (HandleOfflineMessage(e)) return;
+            if (HandleBetaMessage(e)) return;
             if (HandlePanelMessage(e)) return;
             var t = e.TryGetWebMessageAsString();
             if (t != "light" && t != "dark") return;
@@ -563,7 +619,15 @@ body{display:flex;flex-direction:column;align-items:center;justify-content:cente
         web.CoreWebView2.NavigationStarting += (_, e) =>
         {
             // Saiu do painel local (foi para o site)? Então a página não é mais o painel.
-            if (e.Uri.StartsWith("http", StringComparison.OrdinalIgnoreCase)) panelActive = false;
+            var isWeb = e.Uri.StartsWith("http", StringComparison.OrdinalIgnoreCase);
+            if (isWeb) panelActive = false;
+            // Offline (manual ou sem rede): não abre o site, mostra a tela "Sem conexão"
+            if (isWeb && IsInAppHost(e.Uri) && IsOffline)
+            {
+                e.Cancel = true;
+                BeginInvoke(() => ShowOfflinePage(e.Uri));
+                return;
+            }
             if (!IsInAppHost(e.Uri) && !e.Uri.StartsWith("about:") && !e.Uri.StartsWith("data:"))
             {
                 e.Cancel = true;
@@ -572,6 +636,7 @@ body{display:flex;flex-direction:column;align-items:center;justify-content:cente
         };
 
         await PlaySplashAsync();
+        await BetaAfterStartAsync();
     }
 
     async Task<bool> TryInitAsync()
@@ -579,7 +644,7 @@ body{display:flex;flex-direction:column;align-items:center;justify-content:cente
         try
         {
             // Dados (login, cookies, configurações) ficam numa pasta do usuário
-            var env = await CoreWebView2Environment.CreateAsync(null, DataDir);
+            var env = await CoreWebView2Environment.CreateAsync(FixedRuntimeDir(), DataDir); // FixedRuntimeDir: runtime embutido (offline), senão o do Windows
             await web.EnsureCoreWebView2Async(env);
             return true;
         }
@@ -591,9 +656,12 @@ body{display:flex;flex-direction:column;align-items:center;justify-content:cente
         try
         {
             Text = "Azul Groove — instalando componente necessário…";
-            var exe = Path.Combine(Path.GetTempPath(), "MicrosoftEdgeWebview2Setup.exe");
-            using (var http = new HttpClient())
+            // 1) instalador offline ao lado do app (funciona sem internet)  2) senão baixa da Microsoft (precisa de internet)
+            var exe = FindLocalWebViewInstaller();
+            if (exe == null)
             {
+                exe = Path.Combine(Path.GetTempPath(), "MicrosoftEdgeWebview2Setup.exe");
+                using var http = new HttpClient();
                 var bytes = await http.GetByteArrayAsync("https://go.microsoft.com/fwlink/p/?LinkId=2124703");
                 await File.WriteAllBytesAsync(exe, bytes);
             }
@@ -631,6 +699,15 @@ sealed class AppSettings
     public bool TrayOnClose { get; set; } = true;  // X da janela manda para a bandeja
     public int Theme { get; set; } = 0;            // 0 = automático (Windows), 1 = claro, 2 = escuro
     public int StartPage { get; set; } = 0;        // 0 = painel do app (padrão), 1 = site, 2 = chat
+    public bool OfflineMode { get; set; }          // modo offline: não usa a internet (só o painel local)
+
+    // ---- Beta ----
+    public string UserName { get; set; } = "";     // nome informado na configuração inicial
+    public string UserType { get; set; } = "";     // tipo de usuário (Ouvinte, DJ, Streamer...)
+    public bool SetupDone { get; set; }            // já passou pelo diálogo de boas-vindas
+    public bool AutoUpdate { get; set; } = true;   // verificar atualização ao abrir
+    public DateTime LastUpdateCheck { get; set; }  // última checagem (UTC)
+    public string LastVersion { get; set; } = "";  // última versão que rodou (para avisar "Atualizado!")
 
     static string FilePath => Path.Combine(MainForm.DataDir, "settings.json");
 
