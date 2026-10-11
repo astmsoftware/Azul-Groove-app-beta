@@ -71,16 +71,18 @@ public partial class MainForm
             if (src.StartsWith("http", StringComparison.OrdinalIgnoreCase)) ShowOfflinePage(src);
             else if (OnOfflinePage) ShowOfflinePage(); // só troca o texto para "modo offline ativado"
         }
-        else if (OnOfflinePage) _ = LeaveManualOfflineAsync();
+        else if (OnOfflinePage) LeaveManualOfflineAsync();
 
         _ = PushOfflineToPanelAsync(on);
     }
 
-    async Task LeaveManualOfflineAsync()
+    // Ao desligar o modo offline vai direto para o site (sem "sondar" antes). Se realmente não houver rede,
+    // a falha de navegação cai em OfflineOnNavigationCompleted e mostra a tela "Sem conexão".
+    void LeaveManualOfflineAsync()
     {
-        if (await TryReconnectAsync(false)) return;
-        if (!IsDisposed && OnOfflinePage)
-            ShowOfflinePage(null, "Modo offline desligado, mas ainda não há conexão com a internet.");
+        if (IsDisposed || web.CoreWebView2 == null) return;
+        skipSplash = true;
+        web.CoreWebView2.Navigate(lastWebTarget ?? HomeUrl);
     }
 
     // Mantém o botão do painel igual ao item da bandeja
@@ -145,6 +147,7 @@ public partial class MainForm
         {
             case "offline:retry": _ = TryReconnectAsync(false); break;
             case "offline:panel": ShowPanel(); break;
+            case "offline:chat": ShowLocalChat(); break;
             case "offline:online":
             case "offline:set:0": SetOfflineMode(false); break;
             case "offline:set:1": SetOfflineMode(true); break;
@@ -295,6 +298,7 @@ button.gh:hover{background:rgba(127,127,127,.22)}
  <div class="list">
   <div>✅  Painel, configurações e atalhos</div>
   <div>✅  Tema claro / escuro</div>
+  <div>✅  Chat offline com IA no seu PC (Ollama, LM Studio, Jan…)</div>
   <div class="no">🌐  Chat e login precisam de internet</div>
  </div>
  <p class="st" id="st">@NOTE@</p>
@@ -302,6 +306,7 @@ button.gh:hover{background:rgba(127,127,127,.22)}
   <button class="pri" id="retry">Tentar novamente</button>
   <button class="pri" id="online">Desativar modo offline</button>
   <button class="gh" id="panel">Abrir painel</button>
+  <button class="gh" id="lchat">Chat offline</button>
  </div>
 </div></div>
 <script>
@@ -316,6 +321,7 @@ $('online').style.display=manual?'':'none';
 $('retry').onclick=function(){var b=this;b.disabled=true;status('Verificando a conexão…');send('offline:retry');setTimeout(function(){b.disabled=false},3500)};
 $('online').onclick=function(){status('Reconectando…');send('offline:online')};
 $('panel').onclick=function(){send('offline:panel')};
+$('lchat').onclick=function(){send('offline:chat')};
 if($('st').textContent)$('st').style.opacity=1;
 window.__azOff={status:status};
 </script></body></html>

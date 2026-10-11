@@ -105,7 +105,8 @@ public partial class MainForm
             start = cfg.StartPage,
             hotkeyOk,
             hotkeyLabel = Presets[cfg.Preset].Label,
-            news = justUpdated
+            news = justUpdated,
+            aiMin = lai.StopOnMinimize
         });
         justUpdated = false; // as novidades abrem sozinhas só uma vez
     }
@@ -118,6 +119,15 @@ public partial class MainForm
         if (t == null || !t.StartsWith("panel:")) return false;
         if (!panelActive || !IsPanelSource(e.Source)) return true; // só o painel local manda comandos
 
+        // IA do PC: "panel:ai:<nome>:<argumento>" (o argumento pode ter ":", como um link https://)
+        if (t.StartsWith("panel:ai:", StringComparison.Ordinal))
+        {
+            var rest = t[9..];
+            var k = rest.IndexOf(':');
+            PanelAiCommand(k < 0 ? rest : rest[..k], k < 0 ? "" : rest[(k + 1)..]);
+            return true;
+        }
+
         var p = t.Split(':');
         var cmd = p.Length > 1 ? p[1] : "";
         switch (cmd)
@@ -128,6 +138,7 @@ public partial class MainForm
             case "open" when p.Length > 2:
                 if (p[2] == "chat") ShowChat();
                 else if (p[2] == "login") ShowChat();   // o login (Discord, Google, GitHub) fica no chat
+                else if (p[2] == "local") ShowLocalChat(); // chat offline (IA no PC) sem ligar o "Modo offline"
                 else if (p[2] == "home") NavigateTo(HomeUrl);
                 else if (p[2] == "docs") NavigateTo(HomeUrl + "docs");
                 else if (p[2] == "ia") NavigateTo(HomeUrl + "ia");
@@ -147,6 +158,26 @@ public partial class MainForm
                 break;
         }
         return true;
+    }
+
+    // Comandos da seção "IA no seu PC" do painel. Reaproveita toda a lógica de MainForm_LocalAi.cs.
+    void PanelAiCommand(string name, string arg)
+    {
+        if (arg.Length > 2000) return;
+        switch (name)
+        {
+            case "aistate": case "mdl_dl": case "mdl_dluse": case "mdl_cancel": case "mdl_use":
+            case "mdl_del": case "mdl_url": case "mdl_import": case "mdl_vulkan":
+                LAiHandle(name, arg);
+                break;
+            case "mdl_stop": // desliga o motor e libera a memória (liga de novo sozinho quando for conversar)
+                if (lchatBusy) { _ = LChatPushAsync("aiMsg", "Espere a resposta terminar para desligar a IA."); break; }
+                LAiStop();
+                laiPausedByMin = false;
+                LAiPhase("idle", "");
+                _ = LAiPushStateAsync();
+                break;
+        }
     }
 
     void ApplyPanelSetting(string key, int v)
@@ -173,6 +204,9 @@ public partial class MainForm
                 break;
             case "start" when v >= 0 && v <= 2:
                 cfg.StartPage = v; cfg.Save();
+                break;
+            case "aimin":
+                lai.StopOnMinimize = v == 1; lai.Save();
                 break;
         }
     }
@@ -452,6 +486,11 @@ h2{font-size:.78rem;letter-spacing:1.2px;text-transform:uppercase;color:var(--ac
 .sw input:checked+span{background:var(--ac)}.sw input:checked+span:before{transform:translateX(19px)}
 .btn{background:var(--ac);color:#fff;border:0;border-radius:10px;padding:9px 16px;font:inherit;font-size:.9rem;cursor:pointer;text-decoration:none;display:inline-block}
 .btn.o{background:none;border:1px solid var(--line);color:var(--tx)}
+.btn.pri{display:inline-flex;align-items:center;gap:8px;white-space:nowrap;flex:none;padding:10px 18px;font-weight:600;border-radius:12px;background:linear-gradient(135deg,var(--ac),var(--ac2));box-shadow:0 6px 18px rgba(88,101,242,.35);transition:transform .15s,filter .15s,box-shadow .15s}
+.btn.pri:hover:not(:disabled){transform:translateY(-1px);filter:brightness(1.1);box-shadow:0 10px 24px rgba(88,101,242,.45)}
+.btn.pri:active:not(:disabled){transform:none}
+.btn.pri.spin svg{animation:azspin .9s linear infinite}@keyframes azspin{to{transform:rotate(360deg)}}
+#upd.upok{color:#3ba55d}#upd.uperr{color:#ed4245}#upd.upnew{color:var(--ac)}
 #upd{margin-top:10px;color:var(--mu);font-size:.92rem}#upd b{color:var(--tx)}
 .md{position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:20px;z-index:9}.md[hidden]{display:none}
 .mc{background:var(--card);border:1px solid var(--line);border-radius:16px;width:min(640px,100%);max-height:84vh;overflow:auto;padding:20px}
@@ -463,12 +502,19 @@ h2{font-size:.78rem;letter-spacing:1.2px;text-transform:uppercase;color:var(--ac
 .ac{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;align-items:center}
 .rc{text-align:center;padding:34px 20px}.rc h3{margin:12px 0 6px}.rc p{color:var(--mu)}
 .ft{margin-top:34px;color:var(--mu);font-size:.85rem;text-align:center}
+.pb{height:6px;border-radius:6px;background:var(--line);margin-top:8px;overflow:hidden;max-width:360px}.pb[hidden]{display:none}.pb i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--ac),var(--ac2));transition:width .3s}
+.ainote{color:var(--mu);font-size:.88rem;margin:10px 2px 0}
+.mdl{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px 18px;margin-top:10px}.mdl.use{border-color:var(--ac)}
+.mdl h4{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.mdl p{color:var(--mu);font-size:.9rem;margin:4px 0}.mdl .meta{color:var(--mu);font-size:.8rem}
+.aitabs{display:inline-flex;margin-top:12px}.aipane{margin-top:12px}.aipane[hidden]{display:none}.aipane .ainote{margin-top:0}
+#ai-msg{margin-top:10px;color:var(--mu);font-size:.92rem}
 </style></head><body><div class="w">
 <div class="hd"><div class="lg"><i></i><i></i><i></i><i></i><i></i></div><div><h1>Azul Groove</h1><p>Painel do app · versão <b id="ver">...</b></p></div></div>
 
 <h2>Ir para</h2>
 <div class="g">
 <button class="b p" data-open="chat"><b>💬 Abrir o chat</b><small>Conversar com a IA</small></button>
+<button class="b" data-open="local"><b>🖥️ Chat offline</b><small>IA no seu PC, sem ligar o modo offline</small></button>
 <button class="b" data-open="login"><b>👤 Entrar na conta</b><small>Discord, Google ou GitHub</small></button>
 <button class="b" data-open="home"><b>🏠 Site Azul Groove</b><small>Página inicial</small></button>
 <button class="b" data-open="ia"><b>✨ Azul Groove IA</b><small>Conheça a IA</small></button>
@@ -488,8 +534,25 @@ h2{font-size:.78rem;letter-spacing:1.2px;text-transform:uppercase;color:var(--ac
 <div class="r"><div>Dados do app<small>Login, cookies e configurações</small></div><button class="btn o" id="data">Abrir pasta</button></div>
 </div>
 
+<h2>IA no seu PC</h2>
+<div class="c"><div class="r"><div>Estado da IA<small id="ai-st">Carregando…</small><div class="pb" id="ai-pb" hidden><i></i></div></div><div class="ac" style="margin:0"><button class="btn o" id="ai-stop" hidden>Desligar IA</button><button class="btn" data-open="local">Abrir chat offline</button></div></div></div>
+<div class="seg aitabs" id="aitabs"><button data-t="geral" class="on">⚙️ Geral</button><button data-t="modelos">📦 Modelos</button><button data-t="add">➕ Adicionar</button></div>
+<div class="aipane" id="aip-geral"><div class="c">
+<div class="r"><div>Usar a placa de vídeo (Vulkan)<small id="ai-vkinfo">Responde mais rápido em PCs com placa de vídeo. Na primeira vez baixa um motor diferente</small></div><label class="sw"><input type="checkbox" id="ai-vk"><span></span></label></div>
+<div class="r"><div>Fechar a IA ao minimizar<small>Libera memória quando o app é minimizado ou vai para a bandeja. A IA liga de novo ao voltar</small></div><label class="sw"><input type="checkbox" id="aimin"><span></span></label></div>
+</div></div>
+<div class="aipane" id="aip-modelos" hidden>
+<p class="ainote" id="ai-ram"></p>
+<div id="ai-list"></div>
+</div>
+<div class="aipane" id="aip-add" hidden><div class="c">
+<div class="r"><div>Baixar outro modelo<small>Cole o link de um arquivo .gguf (ex.: do Hugging Face)</small></div><div class="ac" style="margin:0"><input class="in" id="ai-url" placeholder="https://…/modelo.gguf" spellcheck="false"><button class="btn" id="ai-urlgo">Baixar</button></div></div>
+<div class="r"><div>Já tem um modelo no PC?<small>Importe um arquivo .gguf sem copiar nem baixar de novo</small></div><button class="btn o" id="ai-imp">Importar .gguf</button></div>
+</div></div>
+<div id="ai-msg"></div>
+
 <h2>Atualizações</h2>
-<div class="c"><div class="r"><div>Versão instalada: <b id="ver2">...</b><small>Confere a última versão publicada no GitHub</small></div><button class="btn" id="chk">Verificar atualização</button></div></div>
+<div class="c"><div class="r"><div>Versão instalada: <b id="ver2">...</b><small>Confere a última versão publicada no GitHub</small></div><button class="btn pri" id="chk">Verificar agora</button></div></div>
 <div id="upd"></div>
 
 <p class="ft">Para fechar de verdade, clique com o botão direito no ícone da bandeja e escolha <b>Sair</b>.<br>Para voltar a este painel: ícone da bandeja → <b>Abrir painel</b>.</p>
@@ -506,6 +569,7 @@ $('#hk').onchange=e=>send('panel:set:hotkey:'+(e.target.checked?1:0));
 $('#tray').onchange=e=>send('panel:set:tray:'+(e.target.checked?1:0));
 $('#preset').onchange=e=>send('panel:set:preset:'+e.target.value);
 $('#start').onchange=e=>send('panel:set:start:'+e.target.value);
+$('#aimin').onchange=e=>send('panel:set:aimin:'+(e.target.checked?1:0));
 $('#data').onclick=()=>send('panel:data');
 const el=(t,c,x)=>{const e=document.createElement(t);if(c)e.className=c;if(x!=null)e.textContent=x;return e};
 // Lista suspensa própria (a lista nativa do Windows ignora o tema escuro). Usada também pelo bloco Beta.
@@ -536,18 +600,89 @@ function showRel(d){const box=$('#ml');box.textContent='';
    if(!it.setup&&!it.portable)a.appendChild(el('small','','Sem arquivos para baixar nesta versão.'));
    c.appendChild(a)}
   box.appendChild(c)})}
-$('#chk').onclick=()=>{$('#chk').disabled=true;$('#upd').textContent='Verificando...';send('panel:update')};
+const IC_R='<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>';
+const IC_D='<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 10l5 5 5-5M4 21h16"/></svg>';
+function setChk(ic,t,spin,dis){const c=$('#chk');c.innerHTML=ic+'<span>'+t+'</span>';c.classList.toggle('spin',!!spin);c.disabled=!!(spin||dis)}
+setChk(IC_R,'Verificar agora');
+$('#chk').onclick=()=>{setChk(IC_R,'Verificando\u2026',true);$('#upd').className='';$('#upd').textContent='Procurando uma versão nova\u2026';send('panel:update')};
+
+// ---- IA no seu PC (tudo configurado aqui; o chat offline só conversa) ----
+const ai={s:null,dl:null};
+const sendAi=(n,a)=>send('panel:ai:'+n+':'+(a||''));
+const gbTxt=n=>n>=1?n.toFixed(1).replace('.',',')+' GB':Math.max(1,Math.round(n*1024))+' MB';
+const mb=n=>(n/1048576).toFixed(0);
+function renderAiStatus(){const s=ai.s;if(!s)return;
+ const act=s.items.find(i=>i.id===s.active),run=s.items.find(i=>i.id===s.running);
+ const busy=s.phase==='download'||s.phase==='extract'||s.phase==='load';
+ let t;
+ if(busy)t='⏳ '+s.text+(s.phase==='download'&&s.pct?' '+s.pct+'%':'');
+ else if(s.phase==='error')t='⚠️ '+s.text;
+ else if(run)t='🟢 Ligada: '+run.name;
+ else if(act)t='⚪ Desligada ('+act.name+' é a escolhida). Liga sozinha quando você conversar.';
+ else t='Nenhuma IA escolhida ainda. Baixe uma abaixo.';
+ $('#ai-st').textContent=t;
+ const pb=$('#ai-pb');pb.hidden=!(busy&&(s.phase==='download'||s.phase==='extract'));pb.firstChild.style.width=(s.pct||0)+'%';
+ $('#ai-stop').hidden=!run;
+}
+function renderAi(){const s=ai.s;if(!s)return;
+ renderAiStatus();
+ $('#ai-vk').checked=!!s.vulkan;
+ $('#ai-vkinfo').textContent=s.engineReady?'Motor '+(s.vulkan?'Vulkan':'CPU')+' já instalado neste PC':'Responde mais rápido em PCs com placa de vídeo. Na primeira vez baixa um motor diferente';
+ $('#ai-ram').textContent='Seu PC tem cerca de '+s.ramGb+' GB de RAM. O modelo marcado como recomendado é o que melhor combina com ele. Depois de baixados, motor e modelo funcionam sem internet.';
+ const box=$('#ai-list');box.textContent='';
+ s.items.forEach(i=>{
+  const c=el('div','mdl'+(i.id===s.active&&i.have?' use':'')),h=el('h4');
+  h.appendChild(el('span','',i.name));
+  if(i.rec)h.appendChild(el('span','tg','recomendado'));
+  if(i.id===s.active&&i.have)h.appendChild(el('span','tg','em uso'));
+  c.appendChild(h);c.appendChild(el('p','',i.desc));
+  const m=[];m.push(i.have?'No PC':'Download de '+gbTxt(i.gb));if(i.ram)m.push('pede ~'+i.ram+' GB de RAM');if(i.lic)m.push(i.lic);
+  c.appendChild(el('div','meta',m.join(' · ')));
+  const a=el('div','ac'),other=!!s.dl&&s.dl!==i.id;
+  if(s.dl===i.id){
+   const pb=el('div','pb'),bar=el('i');bar.id='dlbar';pb.appendChild(bar);pb.style.flex='1';pb.style.minWidth='140px';
+   const d=ai.dl&&ai.dl.id===i.id?ai.dl:null;bar.style.width=d&&d.total?Math.min(100,d.got*100/d.total)+'%':'0';
+   a.appendChild(pb);const tx=el('small','',d&&d.total?mb(d.got)+' / '+mb(d.total)+' MB':'Baixando…');tx.id='dltxt';a.appendChild(tx);
+   const x=el('button','btn o','Cancelar');x.onclick=()=>sendAi('mdl_cancel');a.appendChild(x);
+  }else if(i.have){
+   if(i.id!==s.active){const u=el('button','btn','Usar este');u.onclick=()=>sendAi('mdl_use',i.id);a.appendChild(u)}
+   const x=el('button','btn o dg',i.custom?'Remover':'Apagar');x.onclick=()=>{if(confirm((i.custom?'Remover ':'Apagar ')+i.name+'?'))sendAi('mdl_del',i.id)};a.appendChild(x);
+  }else{
+   const u=el('button','btn','Baixar e usar');u.disabled=other||!s.online;u.onclick=()=>sendAi('mdl_dluse',i.id);a.appendChild(u);
+   const o=el('button','btn o','Só baixar');o.disabled=other||!s.online;o.onclick=()=>sendAi('mdl_dl',i.id);a.appendChild(o);
+   if(i.custom){const x=el('button','btn o dg','Remover');x.onclick=()=>sendAi('mdl_del',i.id);a.appendChild(x)}
+   if(!s.online)a.appendChild(el('small','','Sem internet agora'));
+  }
+  c.appendChild(a);box.appendChild(c)})}
+function aiTab(t){document.querySelectorAll('#aitabs button').forEach(b=>b.classList.toggle('on',b.dataset.t===t));
+ ['geral','modelos','add'].forEach(k=>$('#aip-'+k).hidden=k!==t)}
+document.querySelectorAll('#aitabs button').forEach(b=>b.onclick=()=>aiTab(b.dataset.t));
+let aiMsgT=0;
+function laiMsg(fn,data){
+ if(fn==='ai'){ai.s=data;renderAi()}
+ else if(fn==='engine'&&ai.s){ai.s.phase=data.phase;ai.s.text=data.text;ai.s.pct=data.pct;renderAiStatus()}
+ else if(fn==='aiDl'){ai.dl=data;const b=$('#dlbar');if(b&&data.total){b.style.width=Math.min(100,data.got*100/data.total)+'%';const t=$('#dltxt');if(t)t.textContent=mb(data.got)+' / '+mb(data.total)+' MB'}}
+ else if(fn==='aiMsg'){const m=$('#ai-msg');m.textContent=data;clearTimeout(aiMsgT);aiMsgT=setTimeout(()=>m.textContent='',9000)}
+}
+$('#ai-vk').onchange=e=>sendAi('mdl_vulkan',e.target.checked?'1':'0');
+$('#ai-stop').onclick=()=>sendAi('mdl_stop');
+$('#ai-imp').onclick=()=>sendAi('mdl_import');
+$('#ai-urlgo').onclick=()=>{const v=$('#ai-url').value.trim();if(!v)return;sendAi('mdl_url',v);$('#ai-url').value='';aiTab('modelos')};
+$('#ai-url').onkeydown=e=>{if(e.key==='Enter')$('#ai-urlgo').click()};
 chrome.webview.addEventListener('message',e=>{const d=e.data;
- if(d.type==='state'){$('#ver').textContent=$('#ver2').textContent=d.version;mark(d.theme);$('#hk').checked=d.hotkeyOn;$('#tray').checked=d.tray;$('#start').value=d.start;$('#start').sync();if(d.news)openMd('news');
+ if(d.type==='lai'){laiMsg(d.fn,d.data);return}
+ if(d.type==='state'){$('#ver').textContent=$('#ver2').textContent=d.version;mark(d.theme);$('#hk').checked=d.hotkeyOn;$('#tray').checked=d.tray;$('#start').value=d.start;$('#start').sync();$('#aimin').checked=!!d.aiMin;if(d.news)openMd('news');
   $('#preset').innerHTML=d.presets.map((p,i)=>'<option value="'+i+'">'+p+'</option>').join('');$('#preset').value=d.preset;$('#preset').sync();
   $('#hkinfo').textContent=!d.hotkeyOn?'':d.hotkeyOk?'Ativo: '+d.hotkeyLabel:'⚠️ Outro programa já usa esta combinação. Escolha outra.'}
- if(d.type==='progress'){$('#upd').innerHTML='⬇️ Baixando a atualização… <b>'+d.percent+'%</b>'}
+ if(d.type==='progress'){setChk(IC_D,'Baixando\u2026 '+d.percent+'%',false,true);$('#upd').className='upnew';$('#upd').innerHTML='⬇️ Baixando a atualização… <b>'+d.percent+'%</b>'}
  if(d.type==='restart'){$('#upd').textContent='';$('#rs').hidden=false;let s=d.seconds;$('#cd').textContent=s;const t=setInterval(()=>{s--;$('#cd').textContent=Math.max(s,0);if(s<=0)clearInterval(t)},1000)}
  if(d.type==='releases')showRel(d);
- if(d.type==='update'){$('#chk').disabled=!!d.auto;const u=$('#upd'),l=d.url?' <a class="btn" href="'+d.url+'" target="_blank">'+(d.status==='new'?'Baixar a nova versão':'Abrir página')+'</a>':'';
+ if(d.type==='update'){const u=$('#upd'),l=d.url?' <a class="btn" href="'+d.url+'" target="_blank">'+(d.status==='new'?'Baixar a nova versão':'Abrir página')+'</a>':'';
+  u.className=d.status==='new'?'upnew':d.status==='ok'?'upok':d.status==='err'?'uperr':'';
+  if(d.status==='new'&&d.auto)setChk(IC_D,'Baixando\u2026',false,true);else if(d.status==='err')setChk(IC_R,'Tentar de novo');else setChk(IC_R,'Verificar de novo');
   u.innerHTML=d.status==='new'?'🎉 <b>Nova versão '+d.latest+' disponível</b> (você tem '+d.current+'). '+(d.msg||'')+(d.auto?'':l)
    :d.status==='ok'?'✅ <b>Você está na versão mais recente</b> ('+d.current+').':(d.msg||'')+l}});
-send('panel:get');
+send('panel:get');sendAi('aistate');
 </script></body></html>
 """;
 }

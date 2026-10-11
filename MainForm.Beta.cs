@@ -12,12 +12,13 @@ namespace AzulGroove;
 public partial class MainForm
 {
     // >>> Mude aqui a cada nova beta (e use a MESMA string na tag do GitHub: v1.0.1b, v1.0.2b ...) <<<
-    internal const string AppVersion = "1.0.0b";
+    internal const string AppVersion = "1.1.0b";
 
     const string BetaRepo = "astmsoftware/Azul-Groove-app-beta";   // releases: github.com/astmsoftware/Azul-Groove-app-beta/releases
     const string StableRepo = "andrsodremiranda/Azul-Groove-app";  // versão normal: github.com/andrsodremiranda/Azul-Groove-app/releases
 
     bool betaBusy, betaGreetPending;
+    BetaRelease? betaPending; // versão nova achada pelo botão do painel (aguardando o clique em "Baixar e instalar")
     TaskCompletionSource<BetaWizardOutcome?>? betaWizardTcs; // != null enquanto o assistente de configuração está na tela
 
     static readonly string[] BetaTypes = { "Ouvinte", "DJ / Produtor", "Streamer", "Dono de servidor", "Outro" };
@@ -60,7 +61,8 @@ public partial class MainForm
         }
         switch (t)
         {
-            case "beta:check": _ = BetaCheckUpdateAsync(true); return true;
+            case "beta:check": _ = BetaCheckUpdateAsync(true, inline: true); return true;
+            case "beta:install": _ = BetaInstallFromPanelAsync(); return true;
             case "beta:rollback": _ = BetaRollbackAsync(); return true;
             case "beta:setup": BeginInvoke(() => _ = BetaReopenSetupAsync()); return true;
             default: return false;
@@ -102,29 +104,42 @@ public partial class MainForm
         await BetaCheckUpdateAsync(false);
     }
 
-    async Task BetaCheckUpdateAsync(bool manual)
+    // inline = pedido pelo botão do painel: o resultado aparece no próprio painel (sem janelinhas do Windows)
+    async Task BetaCheckUpdateAsync(bool manual, bool inline = false)
     {
         if (IsOffline)
         {
-            if (manual) BetaBox("Você está sem internet ou no modo offline.\n\nConecte-se para verificar atualizações.");
+            if (inline) await BetaPanelCheckAsync("err", "Sem internet ou modo offline ligado. Conecte-se para verificar.");
+            else if (manual) BetaBox("Você está sem internet ou no modo offline.\n\nConecte-se para verificar atualizações.");
             return;
         }
         if (betaBusy) return;
         betaBusy = true;
         try
         {
+            if (inline) await BetaPanelCheckAsync("busy", "Procurando uma versão nova…");
             var rel = await BetaFetchLatestAsync(BetaRepo, allowPrerelease: true);
             cfg.LastUpdateCheck = DateTime.UtcNow;
             cfg.Save();
 
             if (rel == null)
             {
-                if (manual) BetaBox("Ainda não há nenhuma versão com instalador publicada na página de releases do beta.");
+                if (inline) await BetaPanelCheckAsync("none", "Ainda não há nenhuma versão com instalador publicada no beta.");
+                else if (manual) BetaBox("Ainda não há nenhuma versão com instalador publicada na página de releases do beta.");
                 return;
             }
             if (BetaCompare(rel.Tag, AppVersion) <= 0)
             {
-                if (manual) BetaBox($"Você já está na versão mais recente ({AppVersion}). ✅");
+                if (inline) await BetaPanelCheckAsync("ok", $"Você já está na versão mais recente ({AppVersion}).");
+                else if (manual) BetaBox($"Você já está na versão mais recente ({AppVersion}). ✅");
+                return;
+            }
+            if (inline)
+            {
+                betaPending = rel;
+                var first = rel.Notes.Replace("\r", "").Split('\n').FirstOrDefault(l => l.Trim().Length > 0)?.Trim() ?? "";
+                if (first.Length > 140) first = first[..140] + "…";
+                await BetaPanelCheckAsync("new", $"Nova versão disponível: {rel.Tag} (você está na {AppVersion}).", first);
                 return;
             }
 
@@ -137,7 +152,8 @@ public partial class MainForm
         }
         catch (Exception ex)
         {
-            if (manual)
+            if (inline) await BetaPanelCheckAsync("err", "Não consegui verificar agora: " + ex.Message);
+            else if (manual)
                 BetaBox($"Não consegui verificar atualizações agora.\n{ex.Message}\n\nVocê pode olhar manualmente em:\nhttps://github.com/{BetaRepo}/releases",
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
@@ -195,6 +211,29 @@ public partial class MainForm
 
         exiting = true; // fecha de vez (não vai para a bandeja)
         Close();
+    }
+
+    // Resultado da verificação mostrado no próprio botão/linha do painel
+    async Task BetaPanelCheckAsync(string state, string msg, string notes = "")
+    {
+        try
+        {
+            if (web.CoreWebView2 == null || IsDisposed) return;
+            await web.CoreWebView2.ExecuteScriptAsync(
+                $"window.__azBeta&&window.__azBeta.check({JsonSerializer.Serialize(new { state, msg, notes })})");
+        }
+        catch { /* o painel pode não estar aberto: tudo bem */ }
+    }
+
+    // Clique em "Baixar e instalar" no painel
+    async Task BetaInstallFromPanelAsync()
+    {
+        var rel = betaPending;
+        if (rel == null || betaBusy) return;
+        await BetaPanelCheckAsync("busy", $"Baixando a versão {rel.Tag}… o app vai fechar e o instalador abre em seguida.");
+        await BetaInstallAsync(rel);
+        // se chegou aqui o app não fechou: a instalação falhou (o motivo já apareceu numa janela)
+        if (!IsDisposed) await BetaPanelCheckAsync("new", $"Não deu para instalar agora. Tente de novo ou baixe em {rel.PageUrl}");
     }
 
     async Task BetaPanelStatusAsync(string msg)
@@ -461,7 +500,8 @@ public partial class MainForm
             if (web.CoreWebView2 == null || IsDisposed) return;
             var state = JsonSerializer.Serialize(new
             {
-                ver = AppVersion, name = cfg.UserName, type = cfg.UserType, auto = cfg.AutoUpdate, types = BetaTypes, offline = cfg.OfflineMode
+                ver = AppVersion, name = cfg.UserName, type = cfg.UserType, auto = cfg.AutoUpdate, types = BetaTypes, offline = cfg.OfflineMode,
+                rpc = rpcCfg.On, rpcStatus
             });
             await web.CoreWebView2.ExecuteScriptAsync(BetaPanelScript.Replace("@STATE@", state));
         }
@@ -497,8 +537,23 @@ public partial class MainForm
  row(c2,'Modo offline','Não usa a internet: o painel continua funcionando; site e chat ficam indisponíveis',osw);
  var asw=toggle(S.auto,function(v){S.auto=v;save()});
  row(c2,'Verificar atualização ao abrir o app','Avisa quando sair uma versão nova',asw);
- var chk=h('button','btn','Verificar');chk.onclick=function(){post('beta:check')};
+ var sty=h('style');sty.textContent='#az-beta .btn.pri{display:inline-flex;align-items:center;gap:8px;white-space:nowrap;flex:none;padding:10px 18px;font-weight:600;border-radius:12px;background:linear-gradient(135deg,var(--ac),var(--ac2));box-shadow:0 6px 18px rgba(88,101,242,.35);transition:transform .15s,filter .15s,box-shadow .15s}#az-beta .btn.pri:hover:not(:disabled){transform:translateY(-1px);filter:brightness(1.1);box-shadow:0 10px 24px rgba(88,101,242,.45)}#az-beta .btn.pri:active:not(:disabled){transform:none}#az-beta .btn.pri.spin svg{animation:azspin .9s linear infinite}@keyframes azspin{to{transform:rotate(360deg)}}#az-beta .upok{color:#3ba55d}#az-beta .uperr{color:#ed4245}#az-beta .upnew{color:var(--ac)}';root.appendChild(sty);
+ var IC_R='<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>';
+ var IC_D='<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 10l5 5 5-5M4 21h16"/></svg>';
+ var chk=h('button','btn pri'),mode='check';
+ function setChk(ic,t,spin){chk.innerHTML=ic+'<span>'+t+'</span>';chk.classList.toggle('spin',!!spin);chk.disabled=!!spin}
+ setChk(IC_R,'Verificar agora');
  row(c2,'Atualizações','Procura uma versão nova agora',chk);
+ var upSub=c2.lastChild.querySelector('small');
+ function upd(d){
+  upSub.className='';
+  if(d.state==='busy'){mode='check';setChk(IC_R,'Verificando\u2026',true);upSub.textContent=d.msg}
+  else if(d.state==='ok'){mode='check';setChk(IC_R,'Verificar de novo');upSub.className='upok';upSub.textContent='\u2705 '+d.msg}
+  else if(d.state==='new'){mode='install';setChk(IC_D,'Baixar e instalar');upSub.className='upnew';upSub.textContent='\uD83D\uDD14 '+d.msg+(d.notes?' \u2014 '+d.notes:'')}
+  else if(d.state==='none'){mode='check';setChk(IC_R,'Verificar de novo');upSub.textContent='\u2139\uFE0F '+d.msg}
+  else{mode='check';setChk(IC_R,'Tentar de novo');upSub.className='uperr';upSub.textContent='\u26A0\uFE0F '+d.msg}
+ }
+ chk.onclick=function(){if(mode==='install'){post('beta:install')}else{upd({state:'busy',msg:'Procurando uma versão nova\u2026'});post('beta:check')}};
  var cfgb=h('button','btn o','Refazer');cfgb.onclick=function(){post('beta:setup')};
  row(c2,'Configuração inicial','Nome, tipo de usuário, tema e atalho',cfgb);
  var box=h('div');box.style.cssText='display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end';
@@ -510,9 +565,15 @@ public partial class MainForm
   rb.disabled=cn.disabled=chk.disabled=cfgb.disabled=true;status('Iniciando…');post('beta:rollback')};
  cn.onclick=reset;box.appendChild(cn);box.appendChild(rb);
  row(c2,'Versão normal','Instala a versão estável em segundo plano e reinicia o app. Seu login e suas configurações ficam salvos.',box);
+ root.appendChild(h('h2','','Discord Rich Presence'));
+ var c3=h('div','c');root.appendChild(c3);
+ var rsw=toggle(S.rpc,function(v){post('rpcui:'+(v?'on':'off'))});
+ row(c3,'Mostrar \u201cOuvindo\u2026\u201d no Discord','Status ao ligar: '+S.rpcStatus,rsw);
+ var rcf=h('button','btn o','Configurar');rcf.onclick=function(){post('rpcui:config')};
+ row(c3,'Configurações do Rich Presence','ID do aplicativo, link e token do bot',rcf);
  var st=h('div');st.id='az-st';root.appendChild(st);
  function status(t){st.style.display='block';st.textContent=t}
- window.__azBeta={status:status,offline:function(v){S.offline=!!v;osw.set(S.offline)}};
+ window.__azBeta={status:status,check:upd,offline:function(v){S.offline=!!v;osw.set(S.offline)}};
  w.insertBefore(root,w.querySelector('.ft'));
 }catch(e){}})(@STATE@);
 """;

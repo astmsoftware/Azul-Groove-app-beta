@@ -6,7 +6,7 @@
 #define OneClick
 
 #define AppName "Azul Groove"
-#define AppVersion "1.0.0"
+#define AppVersion "1.1.0B"
 #define AppPublisher "ASTM Software"
 #define AppExe "AzulGroove.exe"
 

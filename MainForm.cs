@@ -57,6 +57,7 @@ public partial class MainForm : Form
         MinimumSize = new Size(480, 600);
         Controls.Add(web);
         BuildTray();
+        RpcInit();
         Load += async (_, _) => await InitWebAsync();
         // Se o usuário troca o tema do Windows e a página ainda não informou o dela, acompanha o Windows
         Microsoft.Win32.SystemEvents.UserPreferenceChanged += (_, _) =>
@@ -118,7 +119,7 @@ public partial class MainForm : Form
         {
             new ToolStripMenuItem("Azul Groove  ·  " + AppVersion) { Enabled = false }, new ToolStripSeparator(),
             miChat, miPanel, miHome, new ToolStripSeparator(),
-            miTheme, miHotkeyOn, miKeys, miTray, OfflineMenuItem(), new ToolStripSeparator(),
+            miTheme, miHotkeyOn, miKeys, miTray, OfflineMenuItem(), LocalChatMenuItem(), RpcMenuItem(), new ToolStripSeparator(),
             miExit
         });
 
@@ -347,6 +348,7 @@ public partial class MainForm : Form
             }
             return;
         }
+        RpcShutdown();
         OfflineShutdown();
         tray.Visible = false;
         tray.Dispose();
@@ -549,7 +551,7 @@ h1{margin:0;color:var(--tx);font-size:32px;font-weight:600;letter-spacing:.4px;a
         if (skipSplash || IsDisposed) return;
         betaGreetPending = true; // Beta: mostra "Olá, Nome!" quando a próxima página terminar de carregar
         if (justUpdated) ShowPanel(); // depois de atualizar, abre o painel e mostra as novidades
-        else if (cfg.StartPage != 0 && IsOffline) ShowOfflinePage(cfg.StartPage == 2 ? ChatUrl : HomeUrl);
+        else if (cfg.StartPage != 0 && cfg.OfflineMode) ShowOfflinePage(cfg.StartPage == 2 ? ChatUrl : HomeUrl);
         else GoStart();
     }
 
@@ -592,7 +594,10 @@ h1{margin:0;color:var(--tx);font-size:32px;font-weight:600;letter-spacing:.4px;a
         OfflineInit();
         web.CoreWebView2.WebMessageReceived += (_, e) =>
         {
+            if (HandleRpcMessage(e)) return;
+            if (HandleRpcPanelMessage(e)) return;
             if (HandleOfflineMessage(e)) return;
+            if (HandleLocalChatMessage(e)) return;
             if (HandleBetaMessage(e)) return;
             if (HandlePanelMessage(e)) return;
             var t = e.TryGetWebMessageAsString();
@@ -621,8 +626,9 @@ h1{margin:0;color:var(--tx);font-size:32px;font-weight:600;letter-spacing:.4px;a
             // Saiu do painel local (foi para o site)? Então a página não é mais o painel.
             var isWeb = e.Uri.StartsWith("http", StringComparison.OrdinalIgnoreCase);
             if (isWeb) panelActive = false;
-            // Offline (manual ou sem rede): não abre o site, mostra a tela "Sem conexão"
-            if (isWeb && IsInAppHost(e.Uri) && IsOffline)
+            // Só o modo offline MANUAL bloqueia o site. Sem rede de verdade, o site é tentado normalmente
+            // e, se falhar, OfflineOnNavigationCompleted mostra a tela "Sem conexão" (evita falso "sem internet").
+            if (isWeb && IsInAppHost(e.Uri) && cfg.OfflineMode)
             {
                 e.Cancel = true;
                 BeginInvoke(() => ShowOfflinePage(e.Uri));
