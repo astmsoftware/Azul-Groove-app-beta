@@ -9,9 +9,11 @@
     <AssemblyName>AzulGroove</AssemblyName>
     <RootNamespace>AzulGroove</RootNamespace>
     <ApplicationIcon>app.ico</ApplicationIcon>
-    <Version>1.2.3</Version>
+    <Version>1.2.7</Version>
+    <InformationalVersion>1.2.7</InformationalVersion>
     <Company>ASTM Software</Company>
-    <Product>Azul Groove</Product>
+    <Product>Azul Groove Beta</Product>
+    <AssemblyTitle>Azul Groove Beta</AssemblyTitle>
 
     <!-- Um unico .exe que roda em qualquer Windows 10/11 64 bits, sem instalar o .NET -->
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
@@ -25,6 +27,7 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2792.45" />
+    <Compile Remove="UninstallAssistant\**\*.cs" />
   </ItemGroup>
 
 </Project>

@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 
@@ -11,13 +12,15 @@ namespace AzulGroove;
 /// </summary>
 public partial class MainForm
 {
-    // >>> Mude aqui a cada nova beta (e use a MESMA string na tag do GitHub: v1.0.1b, v1.0.2b ...) <<<
-    internal const string AppVersion = "1.1.0b";
+    // >>> Mude aqui a cada nova beta (e use a MESMA string na tag do GitHub: v1.2.7, v1.2.8 ...) <<<
+    internal const string AppVersion = "1.2.7";
 
     const string BetaRepo = "astmsoftware/Azul-Groove-app-beta";   // releases: github.com/astmsoftware/Azul-Groove-app-beta/releases
     const string StableRepo = "andrsodremiranda/Azul-Groove-app";  // versão normal: github.com/andrsodremiranda/Azul-Groove-app/releases
 
     bool betaBusy, betaGreetPending;
+    BetaRelease? betaStagedRel;  // atualização já baixada em segundo plano (aguardando o aviso de reiniciar)
+    string? betaStagedFile;
     BetaRelease? betaPending; // versão nova achada pelo botão do painel (aguardando o clique em "Baixar e instalar")
     TaskCompletionSource<BetaWizardOutcome?>? betaWizardTcs; // != null enquanto o assistente de configuração está na tela
 
@@ -34,7 +37,7 @@ public partial class MainForm
     }
 
     sealed record BetaRelease(string Tag, string AssetName, string AssetUrl, string Notes, string PageUrl);
-    sealed record BetaSetupResult(string Name, string Type, int Theme, int Start, bool Hotkey, int Preset, bool Auto);
+    sealed record BetaSetupResult(string Name, string Type, int Theme, int Start, bool Hotkey, int Preset, bool Auto, string Lang = "");
     sealed record BetaWizardOutcome(BetaSetupResult? Result, bool Skipped);
 
     // ================= Mensagens vindas do painel / do assistente =================
@@ -63,6 +66,7 @@ public partial class MainForm
         {
             case "beta:check": _ = BetaCheckUpdateAsync(true, inline: true); return true;
             case "beta:install": _ = BetaInstallFromPanelAsync(); return true;
+            case "beta:news": _ = BetaSendNewsAsync(); return true;
             case "beta:rollback": _ = BetaRollbackAsync(); return true;
             case "beta:setup": BeginInvoke(() => _ = BetaReopenSetupAsync()); return true;
             default: return false;
@@ -109,55 +113,140 @@ public partial class MainForm
     {
         if (IsOffline)
         {
-            if (inline) await BetaPanelCheckAsync("err", "Sem internet ou modo offline ligado. Conecte-se para verificar.");
-            else if (manual) BetaBox("Você está sem internet ou no modo offline.\n\nConecte-se para verificar atualizações.");
+            if (inline) await BetaPanelCheckAsync("err", Tr("bu.offline"));
+            else if (manual) BetaBox(Tr("bu.offbox"));
             return;
         }
         if (betaBusy) return;
         betaBusy = true;
         try
         {
-            if (inline) await BetaPanelCheckAsync("busy", "Procurando uma versão nova…");
+            if (inline) await BetaPanelCheckAsync("busy", Tr("bu.search"));
             var rel = await BetaFetchLatestAsync(BetaRepo, allowPrerelease: true);
             cfg.LastUpdateCheck = DateTime.UtcNow;
             cfg.Save();
 
             if (rel == null)
             {
-                if (inline) await BetaPanelCheckAsync("none", "Ainda não há nenhuma versão com instalador publicada no beta.");
-                else if (manual) BetaBox("Ainda não há nenhuma versão com instalador publicada na página de releases do beta.");
+                if (inline) await BetaPanelCheckAsync("none", Tr("bu.norel"));
+                else if (manual) BetaBox(Tr("bu.norelbox"));
                 return;
             }
             if (BetaCompare(rel.Tag, AppVersion) <= 0)
             {
-                if (inline) await BetaPanelCheckAsync("ok", $"Você já está na versão mais recente ({AppVersion}).");
-                else if (manual) BetaBox($"Você já está na versão mais recente ({AppVersion}). ✅");
+                if (inline) await BetaPanelCheckAsync("ok", TrF("bu.latest", AppVersion));
+                else if (manual) BetaBox(TrF("bu.latest", AppVersion) + " ✅");
                 return;
             }
             if (inline)
             {
                 betaPending = rel;
-                var first = rel.Notes.Replace("\r", "").Split('\n').FirstOrDefault(l => l.Trim().Length > 0)?.Trim() ?? "";
+                var plainLines = BetaPlainNotes(rel.Notes, 2000).Split('\n');
+                var first = plainLines.FirstOrDefault(l => l.StartsWith("•"))?.Trim()
+                            ?? plainLines.FirstOrDefault(l => l.Trim().Length > 0)?.Trim() ?? "";
                 if (first.Length > 140) first = first[..140] + "…";
-                await BetaPanelCheckAsync("new", $"Nova versão disponível: {rel.Tag} (você está na {AppVersion}).", first);
+                await BetaPanelCheckAsync("new", TrF("bu.new", rel.Tag, AppVersion), first);
                 return;
             }
 
-            var notes = rel.Notes.Length > 500 ? rel.Notes[..500] + "…" : rel.Notes;
-            var ask = BetaBox(
-                $"Nova versão disponível: {rel.Tag}\nVocê está na {AppVersion}.\n\n{notes}\n\n" +
-                "Baixar e instalar agora? O app será fechado e o instalador abre em seguida.",
-                MessageBoxButtons.YesNo, MessageBoxIcon.Question);
-            if (ask == DialogResult.Yes) await BetaInstallAsync(rel);
+            // Atualização silenciosa: baixa em segundo plano (sem instalador na tela) e só avisa para reiniciar.
+            await BetaStageAsync(rel);
         }
         catch (Exception ex)
         {
-            if (inline) await BetaPanelCheckAsync("err", "Não consegui verificar agora: " + ex.Message);
+            if (inline) await BetaPanelCheckAsync("err", TrF("bu.err", ex.Message));
             else if (manual)
-                BetaBox($"Não consegui verificar atualizações agora.\n{ex.Message}\n\nVocê pode olhar manualmente em:\nhttps://github.com/{BetaRepo}/releases",
+                BetaBox(TrF("bu.errbox", ex.Message, $"https://github.com/{BetaRepo}/releases"),
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
         finally { betaBusy = false; }
+    }
+
+    // ================= Atualização silenciosa =================
+    // Baixa o instalador em segundo plano (sem mexer no título da janela) e mostra UM aviso: "Reiniciar agora?".
+    // Se a pessoa disser "Sim", o mesmo .cmd escondido da volta à versão normal instala sem janelas e reabre o app.
+    async Task BetaStageAsync(BetaRelease rel)
+    {
+        if (betaStagedRel?.Tag != rel.Tag || betaStagedFile == null || !File.Exists(betaStagedFile))
+        {
+            betaStagedFile = await BetaDownloadAsync(rel, null, setTitle: false);
+            betaStagedRel = rel;
+        }
+        BetaAskRestart(rel);
+    }
+
+    void BetaAskRestart(BetaRelease rel)
+    {
+        var notes = BetaPlainNotes(rel.Notes, 600);
+        var ask = BetaBox(TrF("bu.ask", rel.Tag, AppVersion, notes), MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+        if (ask == DialogResult.Yes && betaStagedFile != null) BetaRunSilentAndRestart(betaStagedFile);
+    }
+
+    // Transforma o markdown das notas da release em texto limpo (sem ##, **, `código`, links).
+    static string BetaPlainNotes(string? md, int max = 600)
+    {
+        var lines = new List<string>();
+        foreach (var raw in (md ?? "").Replace("\r", "").Split('\n'))
+        {
+            var t = raw.Trim();
+            if (t.Length == 0)
+            {
+                if (lines.Count > 0 && lines[^1].Length > 0) lines.Add("");
+                continue;
+            }
+            if (t.StartsWith('#')) t = t.TrimStart('#').Trim();
+            else if (t.StartsWith("- ") || t.StartsWith("* ")) t = "• " + t[2..].Trim();
+            t = Regex.Replace(t, @"\*\*(.+?)\*\*", "$1");
+            t = Regex.Replace(t, @"__(.+?)__", "$1");
+            t = Regex.Replace(t, @"\[(.+?)\]\((.+?)\)", "$1");
+            t = t.Replace("`", "");
+            lines.Add(t);
+        }
+        var s = string.Join("\n", lines).Trim();
+        if (s.Length > max)
+        {
+            int cut = max;
+            if (char.IsHighSurrogate(s[cut - 1])) cut--;
+            s = s[..cut].TrimEnd() + "…";
+        }
+        return s;
+    }
+
+    // "Novidades" do Beta: lê as notas das últimas versões do repositório BETA e manda para o painel.
+    async Task BetaSendNewsAsync()
+    {
+        object payload;
+        try
+        {
+            if (IsOffline) throw new InvalidOperationException("offline");
+            var json = await BetaHttp.GetStringAsync($"https://api.github.com/repos/{BetaRepo}/releases?per_page=6");
+            using var doc = JsonDocument.Parse(json);
+            var items = new List<object>();
+            foreach (var r in doc.RootElement.EnumerateArray())
+            {
+                if (r.GetProperty("draft").GetBoolean()) continue;
+                var tag = r.GetProperty("tag_name").GetString() ?? "";
+                var body = r.TryGetProperty("body", out var b) ? b.GetString() ?? "" : "";
+                var date = r.TryGetProperty("published_at", out var pd) ? pd.GetString() ?? "" : "";
+                items.Add(new
+                {
+                    title = tag,
+                    date = date.Length >= 10 ? date[..10] : "",
+                    current = BetaCompare(tag, AppVersion) == 0,
+                    body = BetaPlainNotes(body, 1500)
+                });
+            }
+            payload = new { err = false, items };
+        }
+        catch { payload = new { err = true, items = Array.Empty<object>() }; }
+
+        try
+        {
+            if (web.CoreWebView2 == null || IsDisposed) return;
+            await web.CoreWebView2.ExecuteScriptAsync(
+                $"window.__azBeta&&window.__azBeta.news({JsonSerializer.Serialize(payload)})");
+        }
+        catch { /* o painel pode não estar aberto: tudo bem */ }
     }
 
     // ================= Voltar para a versão normal (modo silencioso) =================
@@ -166,46 +255,56 @@ public partial class MainForm
     async Task BetaRollbackAsync()
     {
         if (betaBusy) return;
-        if (IsOffline) { await BetaPanelStatusAsync("Sem internet (ou modo offline ligado): conecte-se para voltar à versão normal."); return; }
+        if (IsOffline) { await BetaPanelStatusAsync(Tr("bu.rb.offline")); return; }
         betaBusy = true;
         try
         {
-            await BetaPanelStatusAsync("Procurando a versão normal…");
+            await BetaPanelStatusAsync(Tr("bu.rb.search"));
             var rel = await BetaFetchLatestAsync(StableRepo, allowPrerelease: false);
             if (rel == null)
             {
-                await BetaPanelStatusAsync("Não achei o instalador da versão normal. Abrindo a página de downloads no navegador…");
+                await BetaPanelStatusAsync(Tr("bu.rb.nofile"));
                 OpenExternal($"https://github.com/{StableRepo}/releases/latest");
                 return;
             }
 
-            var file = await BetaDownloadAsync(rel, pct => _ = BetaPanelStatusAsync($"Baixando a versão normal… {pct}%"));
-            await BetaPanelStatusAsync("Pronto! Instalando em segundo plano — o app vai reiniciar sozinho…");
+            var file = await BetaDownloadAsync(rel, pct => _ = BetaPanelStatusAsync(TrF("bu.rb.dl", pct)));
+            await BetaPanelStatusAsync(Tr("bu.rb.install"));
             await Task.Delay(1500);
-            BetaRunSilentAndRestart(file);
+            BetaRunSilentAndRestart(file, StableExeCandidates()); // a versão normal é instalada ao lado da Beta
         }
         catch (Exception ex)
         {
-            Text = "Azul Groove";
-            await BetaPanelStatusAsync("Não consegui baixar agora (" + ex.Message + "). Abrindo a página de downloads no navegador…");
+            Text = "Azul Groove Beta";
+            await BetaPanelStatusAsync(TrF("bu.rb.fail", ex.Message));
             OpenExternal($"https://github.com/{StableRepo}/releases/latest");
         }
         finally { betaBusy = false; }
     }
 
+    // Onde o instalador da versão normal coloca o AzulGroove.exe (por usuário ou para todos); no fim, a própria Beta.
+    static string[] StableExeCandidates() => new[]
+    {
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "Azul Groove", "AzulGroove.exe"),
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Azul Groove", "AzulGroove.exe"),
+        Application.ExecutablePath
+    };
+
     // Um .cmd escondido espera o app fechar, roda o instalador sem janelas e abre o app de novo.
-    void BetaRunSilentAndRestart(string setupFile)
+    void BetaRunSilentAndRestart(string setupFile, string[]? launch = null)
     {
         var exe = Application.ExecutablePath;
         var cmd = Path.Combine(Path.GetDirectoryName(setupFile)!, "reiniciar.cmd");
-        var lines = new[]
+        var lines = new List<string>
         {
             "@echo off",
             "chcp 65001 >nul",
             "ping -n 3 127.0.0.1 >nul",   // dá tempo do app fechar
-            $"start \"\" /wait \"{setupFile}\" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /CLOSEAPPLICATIONS",
-            $"if exist \"{exe}\" start \"\" \"{exe}\""
+            $"start \"\" /wait \"{setupFile}\" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /CLOSEAPPLICATIONS"
         };
+        // abre o primeiro app que existir (atualização: a Beta; voltar à versão normal: a normal)
+        foreach (var x in (launch is { Length: > 0 } ? launch : new[] { exe }))
+            lines.Add($"if exist \"{x}\" (start \"\" \"{x}\" & exit /b)");
         File.WriteAllText(cmd, string.Join("\r\n", lines) + "\r\n", new System.Text.UTF8Encoding(false));
         Process.Start(new ProcessStartInfo(cmd) { UseShellExecute = true, WindowStyle = ProcessWindowStyle.Hidden });
 
@@ -230,10 +329,10 @@ public partial class MainForm
     {
         var rel = betaPending;
         if (rel == null || betaBusy) return;
-        await BetaPanelCheckAsync("busy", $"Baixando a versão {rel.Tag}… o app vai fechar e o instalador abre em seguida.");
+        await BetaPanelCheckAsync("busy", TrF("bu.dl", rel.Tag));
         await BetaInstallAsync(rel);
         // se chegou aqui o app não fechou: a instalação falhou (o motivo já apareceu numa janela)
-        if (!IsDisposed) await BetaPanelCheckAsync("new", $"Não deu para instalar agora. Tente de novo ou baixe em {rel.PageUrl}");
+        if (!IsDisposed) await BetaPanelCheckAsync("new", TrF("bu.installfail", rel.PageUrl));
     }
 
     async Task BetaPanelStatusAsync(string msg)
@@ -252,6 +351,7 @@ public partial class MainForm
     {
         var json = await BetaHttp.GetStringAsync($"https://api.github.com/repos/{repo}/releases?per_page=10");
         using var doc = JsonDocument.Parse(json);
+        BetaRelease? best = null; // a lista do GitHub vem por data de criação: escolhe a MAIOR versão, não a primeira
         foreach (var r in doc.RootElement.EnumerateArray())
         {
             if (r.GetProperty("draft").GetBoolean()) continue;
@@ -273,12 +373,13 @@ public partial class MainForm
             var tag = r.GetProperty("tag_name").GetString() ?? "";
             var body = r.TryGetProperty("body", out var b) ? b.GetString() ?? "" : "";
             var page = r.TryGetProperty("html_url", out var h) ? h.GetString() ?? "" : "";
-            return new BetaRelease(tag, name, url, body.Trim(), page);
+            var cand = new BetaRelease(tag, name, url, body.Trim(), page);
+            if (best == null || BetaCompare(cand.Tag, best.Tag) > 0) best = cand;
         }
-        return null;
+        return best;
     }
 
-    // Compara "v1.0.0b" com "1.0.1b": primeiro a parte numérica; se empatar, a versão sem sufixo (estável) vale mais que "b"
+    // Compara "v1.2.0b" com "1.2.1b": primeiro a parte numérica; se empatar, a versão sem sufixo (estável) vale mais que "b"
     static int BetaCompare(string a, string b)
     {
         static (Version v, string suffix) Parse(string s)
@@ -301,26 +402,28 @@ public partial class MainForm
         return string.CompareOrdinal(sa, sb);
     }
 
+    // Instala em modo silencioso: baixa (ou usa o arquivo já baixado), fecha o app, instala escondido e abre de novo.
     async Task BetaInstallAsync(BetaRelease rel)
     {
         var oldTitle = Text;
         try
         {
-            tray.ShowBalloonTip(2500, "Azul Groove Beta", $"Baixando a versão {rel.Tag}…", ToolTipIcon.Info);
-            var file = await BetaDownloadAsync(rel);
-            Process.Start(new ProcessStartInfo(file) { UseShellExecute = true });
-            exiting = true; // fecha de vez (não vai para a bandeja) para o instalador poder substituir o .exe
-            Close();
+            string file;
+            if (betaStagedRel?.Tag == rel.Tag && betaStagedFile != null && File.Exists(betaStagedFile)) file = betaStagedFile;
+            else file = await BetaDownloadAsync(rel, pct => _ = BetaPanelCheckAsync("busy", TrF("bu.dlpct", rel.Tag, pct)), setTitle: false);
+            Text = oldTitle;
+            await BetaPanelCheckAsync("busy", Tr("bu.installing"));
+            await Task.Delay(1200);
+            BetaRunSilentAndRestart(file);
         }
         catch (Exception ex)
         {
             Text = oldTitle;
-            BetaBox($"Não consegui baixar/instalar.\n{ex.Message}\n\nBaixe manualmente em:\n{rel.PageUrl}",
-                MessageBoxButtons.OK, MessageBoxIcon.Error);
+            BetaBox(TrF("bu.dlerr", ex.Message, rel.PageUrl), MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
     }
 
-    async Task<string> BetaDownloadAsync(BetaRelease rel, Action<int>? onProgress = null)
+    async Task<string> BetaDownloadAsync(BetaRelease rel, Action<int>? onProgress = null, bool setTitle = true)
     {
         var dir = Path.Combine(Path.GetTempPath(), "AzulGrooveUpdate");
         Directory.CreateDirectory(dir);
@@ -342,7 +445,7 @@ public partial class MainForm
                 if (total > 0)
                 {
                     int pct = (int)(done * 100 / total);
-                    if (pct != last) { last = pct; Text = $"Azul Groove — baixando atualização… {pct}%"; onProgress?.Invoke(pct); }
+                    if (pct != last) { last = pct; if (setTitle) Text = TrF("bu.wintitle", pct); onProgress?.Invoke(pct); }
                 }
             }
         }
@@ -366,11 +469,11 @@ public partial class MainForm
             cfg.LastVersion = AppVersion;
             cfg.Save();
 
-            var who = string.IsNullOrWhiteSpace(cfg.UserName) ? "Olá!" : $"Olá, {cfg.UserName}!";
-            var type = string.IsNullOrWhiteSpace(cfg.UserType) ? "" : $"  ·  {cfg.UserType}";
+            var who = string.IsNullOrWhiteSpace(cfg.UserName) ? Tr("bg.hi") : TrF("bg.hiname", cfg.UserName);
+            var type = string.IsNullOrWhiteSpace(cfg.UserType) ? "" : $"  ·  {TypeLabel(cfg.UserType)}";
             var msg = updated
-                ? $"{who}{type}  ·  Atualizado para a versão {AppVersion} ✨"
-                : $"{who}{type}  ·  Bem-vindo de volta 🎧";
+                ? $"{who}{type}  ·  {TrF("bg.upd", AppVersion)}"
+                : $"{who}{type}  ·  {Tr("bg.back")}";
 
             await web.CoreWebView2.ExecuteScriptAsync(BetaGreetScript.Replace("@MSG@", JsonSerializer.Serialize(msg)));
         }
@@ -402,17 +505,20 @@ public partial class MainForm
         FormClosing += onClosing;
         try
         {
-            var labels = JsonSerializer.Serialize(Presets.Select(p => p.Label).ToArray());
+            var labels = JsonSerializer.Serialize(Presets.Select((p, i) => PresetLabel(i)).ToArray());
             var init = cfg.SetupDone
                 ? JsonSerializer.Serialize(new
                 {
                     name = cfg.UserName, type = cfg.UserType,
                     theme = cfg.Theme == 1 ? "light" : cfg.Theme == 2 ? "dark" : "auto",
                     start = cfg.StartPage == 1 ? "site" : "panel",
-                    hk = cfg.HotkeyOn, preset = cfg.Preset, auto = cfg.AutoUpdate
+                    hk = cfg.HotkeyOn, preset = cfg.Preset, auto = cfg.AutoUpdate, lang = cfg.Lang
                 })
                 : "null";
-            var html = BetaWelcomeHtml.Replace("@PRESETS@", labels).Replace("@VER@", AppVersion).Replace("@INIT@", init);
+            var html = BetaWelcomeHtml.Replace("@PRESETS@", labels).Replace("@VER@", AppVersion).Replace("@INIT@", init)
+                .Replace("@LANGS@", I18nLangsJson()).Replace("@LANGLIST@", I18nListJson()).Replace("@LANG@", LangCode)
+                .Replace("@DD_SCROLL@", DropdownScrollbarCss)
+                .Replace("@DD_HELPER@", DropdownViewportScript);
 
             web.CoreWebView2.NavigateToString(html);
             var outcome = await tcs.Task;
@@ -460,7 +566,8 @@ public partial class MainForm
                         r.GetProperty("start").GetInt32(),
                         r.GetProperty("hk").GetBoolean(),
                         r.GetProperty("preset").GetInt32(),
-                        r.GetProperty("auto").GetBoolean()), false));
+                        r.GetProperty("auto").GetBoolean(),
+                        r.TryGetProperty("lang", out var lg) && lg.ValueKind == JsonValueKind.String ? lg.GetString() ?? "" : ""), false));
                     break;
             }
         }
@@ -477,6 +584,7 @@ public partial class MainForm
         cfg.Theme = Math.Clamp(r.Theme, 0, 2);
         cfg.HotkeyOn = r.Hotkey;
         cfg.SetupDone = true;
+        cfg.Lang = I18nNormalize(r.Lang);
         cfg.Save();
 
         // mantém os menus da bandeja iguais ao que foi escolhido
@@ -488,7 +596,7 @@ public partial class MainForm
 
         ApplyThemeMode(pushToSite: true);
         RegisterHotkey();
-        UpdateLabels();
+        TrayRetranslate(); // bandeja no idioma escolhido no assistente (já chama UpdateLabels)
     }
 
     // ================= Opções beta dentro do painel =================
@@ -500,8 +608,10 @@ public partial class MainForm
             if (web.CoreWebView2 == null || IsDisposed) return;
             var state = JsonSerializer.Serialize(new
             {
-                ver = AppVersion, name = cfg.UserName, type = cfg.UserType, auto = cfg.AutoUpdate, types = BetaTypes, offline = cfg.OfflineMode,
-                rpc = rpcCfg.On, rpcStatus
+                ver = AppVersion, name = cfg.UserName, type = cfg.UserType, auto = cfg.AutoUpdate, offline = cfg.OfflineMode,
+                types = BetaTypes.Select((v, i) => new { v, l = Tr(BetaTypeKeys[i]) }).ToArray(), // v = valor guardado (pt), l = rótulo na tela
+                rpc = rpcCfg.On, rpcStatus,
+                T = Texts("p.", "b.", "bu.")
             });
             await web.CoreWebView2.ExecuteScriptAsync(BetaPanelScript.Replace("@STATE@", state));
         }
@@ -513,67 +623,76 @@ public partial class MainForm
  if(location.protocol==='https:')return;
  var old=document.getElementById('az-beta');if(old)old.remove();
  var w=document.querySelector('.w');if(!w||typeof ddify!=='function')return;
- function h(t,c,x){var e=document.createElement(t);if(c)e.className=c;if(x!=null)e.textContent=x;return e}
+ var T=S.T||{};function t(k){var a=arguments;return String(T[k]!=null?T[k]:k).replace(/\{(\d+)\}/g,function(m,i){return a[+i+1]!=null?a[+i+1]:m})}
+ function h(n,c,x){var e=document.createElement(n);if(c)e.className=c;if(x!=null)e.textContent=x;return e}
  function post(m){try{window.chrome.webview.postMessage(m)}catch(e){}}
- function row(card,t,sub,ctl){var r=h('div','r'),l=h('div');l.appendChild(document.createTextNode(t));if(sub)l.appendChild(h('small','',sub));r.appendChild(l);r.appendChild(ctl);card.appendChild(r)}
+ function row(card,ti,sub,ctl){var r=h('div','r'),l=h('div');l.appendChild(document.createTextNode(ti));if(sub)l.appendChild(h('small','',sub));r.appendChild(l);r.appendChild(ctl);card.appendChild(r)}
  function toggle(on,cb){var lb=h('label','sw'),i=h('input');i.type='checkbox';i.checked=!!on;i.onchange=function(){cb(i.checked)};lb.appendChild(i);lb.appendChild(h('span'));lb.set=function(v){i.checked=!!v};return lb}
  var root=h('div');root.id='az-beta';
  var timer;
  function save(){clearTimeout(timer);post('beta:save:'+JSON.stringify({name:name.value,type:type.value,auto:S.auto}))}
 
- root.appendChild(h('h2','','Seu perfil'));
+ root.appendChild(h('h2','',t('b.profile')));
  var c1=h('div','c');root.appendChild(c1);
- var name=h('input','in');name.maxLength=40;name.placeholder='Seu nome';name.value=S.name||'';
+ var name=h('input','in');name.maxLength=40;name.placeholder=t('b.name.ph');name.value=S.name||'';
  name.oninput=function(){clearTimeout(timer);timer=setTimeout(save,500)};name.onblur=save;
- row(c1,'Nome','Usado na saudação ao abrir o app',name);
- var tl=S.types.slice();if(S.type&&tl.indexOf(S.type)<0)tl.push(S.type);
- var type=h('select');tl.forEach(function(t){var o=h('option','',t);o.value=t;type.appendChild(o)});type.value=S.type||tl[0];
+ row(c1,t('b.name'),t('b.name.s'),name);
+ var tl=S.types.slice();if(S.type&&!tl.some(function(x){return x.v===S.type}))tl.push({v:S.type,l:S.type});
+ var type=h('select');tl.forEach(function(x){var o=h('option','',x.l);o.value=x.v;type.appendChild(o)});type.value=S.type||tl[0].v;
  var tw=h('div');tw.appendChild(type);ddify(type);type.onchange=save;
- row(c1,'Tipo de usuário','Como você usa o Azul Groove',tw);
+ row(c1,t('b.type'),t('b.type.s'),tw);
 
- root.appendChild(h('h2','','Azul Groove Beta · versão '+S.ver));
+ root.appendChild(h('h2','',t('b.title',S.ver)));
  var c2=h('div','c');root.appendChild(c2);
  var osw=toggle(S.offline,function(v){S.offline=v;post('offline:set:'+(v?'1':'0'))});
- row(c2,'Modo offline','Não usa a internet: o painel continua funcionando; site e chat ficam indisponíveis',osw);
+ row(c2,t('b.off'),t('b.off.s'),osw);
  var asw=toggle(S.auto,function(v){S.auto=v;save()});
- row(c2,'Verificar atualização ao abrir o app','Avisa quando sair uma versão nova',asw);
+ row(c2,t('b.auto'),t('b.auto.s'),asw);
  var sty=h('style');sty.textContent='#az-beta .btn.pri{display:inline-flex;align-items:center;gap:8px;white-space:nowrap;flex:none;padding:10px 18px;font-weight:600;border-radius:12px;background:linear-gradient(135deg,var(--ac),var(--ac2));box-shadow:0 6px 18px rgba(88,101,242,.35);transition:transform .15s,filter .15s,box-shadow .15s}#az-beta .btn.pri:hover:not(:disabled){transform:translateY(-1px);filter:brightness(1.1);box-shadow:0 10px 24px rgba(88,101,242,.45)}#az-beta .btn.pri:active:not(:disabled){transform:none}#az-beta .btn.pri.spin svg{animation:azspin .9s linear infinite}@keyframes azspin{to{transform:rotate(360deg)}}#az-beta .upok{color:#3ba55d}#az-beta .uperr{color:#ed4245}#az-beta .upnew{color:var(--ac)}';root.appendChild(sty);
  var IC_R='<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>';
  var IC_D='<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 10l5 5 5-5M4 21h16"/></svg>';
  var chk=h('button','btn pri'),mode='check';
  function setChk(ic,t,spin){chk.innerHTML=ic+'<span>'+t+'</span>';chk.classList.toggle('spin',!!spin);chk.disabled=!!spin}
- setChk(IC_R,'Verificar agora');
- row(c2,'Atualizações','Procura uma versão nova agora',chk);
+ setChk(IC_R,t('p.chk'));
+ row(c2,t('p.upd'),t('b.upd.s'),chk);
  var upSub=c2.lastChild.querySelector('small');
  function upd(d){
   upSub.className='';
-  if(d.state==='busy'){mode='check';setChk(IC_R,'Verificando\u2026',true);upSub.textContent=d.msg}
-  else if(d.state==='ok'){mode='check';setChk(IC_R,'Verificar de novo');upSub.className='upok';upSub.textContent='\u2705 '+d.msg}
-  else if(d.state==='new'){mode='install';setChk(IC_D,'Baixar e instalar');upSub.className='upnew';upSub.textContent='\uD83D\uDD14 '+d.msg+(d.notes?' \u2014 '+d.notes:'')}
-  else if(d.state==='none'){mode='check';setChk(IC_R,'Verificar de novo');upSub.textContent='\u2139\uFE0F '+d.msg}
-  else{mode='check';setChk(IC_R,'Tentar de novo');upSub.className='uperr';upSub.textContent='\u26A0\uFE0F '+d.msg}
+  if(d.state==='busy'){mode='check';setChk(IC_R,t('p.chking'),true);upSub.textContent=d.msg}
+  else if(d.state==='ok'){mode='check';setChk(IC_R,t('p.chk.again'));upSub.className='upok';upSub.textContent='\u2705 '+d.msg}
+  else if(d.state==='new'){mode='install';setChk(IC_D,t('b.upd.apply'));upSub.className='upnew';upSub.textContent='\uD83D\uDD14 '+d.msg+(d.notes?' \u2014 '+d.notes:'')}
+  else if(d.state==='none'){mode='check';setChk(IC_R,t('p.chk.again'));upSub.textContent='\u2139\uFE0F '+d.msg}
+  else{mode='check';setChk(IC_R,t('p.retry'));upSub.className='uperr';upSub.textContent='\u26A0\uFE0F '+d.msg}
  }
- chk.onclick=function(){if(mode==='install'){post('beta:install')}else{upd({state:'busy',msg:'Procurando uma versão nova\u2026'});post('beta:check')}};
- var cfgb=h('button','btn o','Refazer');cfgb.onclick=function(){post('beta:setup')};
- row(c2,'Configuração inicial','Nome, tipo de usuário, tema e atalho',cfgb);
+ chk.onclick=function(){if(mode==='install'){post('beta:install')}else{upd({state:'busy',msg:t('bu.search')});post('beta:check')}};
+ var nb=h('button','btn o',t('b.news.show')),nw=h('div','c'),nOpen=false;nw.style.cssText='display:none;margin-top:10px;padding:14px 18px;max-height:340px;overflow:auto';
+ row(c2,t('b.news'),t('b.news.s'),nb);
+ nb.onclick=function(){if(nOpen){nOpen=false;nw.style.display='none';nb.textContent=t('b.news.show');return}nb.disabled=true;nb.textContent=t('p.loading');post('beta:news')};
+ function news(d){nb.disabled=false;nw.textContent='';
+  if(d.err||!d.items||!d.items.length){nw.appendChild(h('div','',t(d.err?'b.news.err':'b.news.none')))}
+  else d.items.forEach(function(it){var hb=h('b','',it.title+(it.date?'  \u00B7  '+it.date:'')+(it.current?'  \u00B7  '+t('b.news.cur'):''));hb.style.cssText='display:block;margin-top:8px';nw.appendChild(hb);var q=h('div','',it.body||t('p.rel.nonotes'));q.style.cssText='white-space:pre-wrap;opacity:.85;font-size:.9em;margin:4px 0 10px';nw.appendChild(q)});
+  nw.style.display='block';nOpen=true;nb.textContent=t('b.news.hide')}
+ root.appendChild(nw);
+ var cfgb=h('button','btn o',t('b.setup.b'));cfgb.onclick=function(){post('beta:setup')};
+ row(c2,t('b.setup'),t('b.setup.s'),cfgb);
  var box=h('div');box.style.cssText='display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end';
- var rb=h('button','btn dg','Voltar para a versão normal'),cn=h('button','btn o','Cancelar');cn.style.display='none';
+ var rb=h('button','btn dg',t('b.stable.b')),cn=h('button','btn o',t('p.cancel'));cn.style.display='none';
  var armed=false;
- function reset(){armed=false;rb.textContent='Voltar para a versão normal';cn.style.display='none'}
+ function reset(){armed=false;rb.textContent=t('b.stable.b');cn.style.display='none'}
  rb.onclick=function(){
-  if(!armed){armed=true;rb.textContent='Confirmar: instalar e reiniciar';cn.style.display='';return}
-  rb.disabled=cn.disabled=chk.disabled=cfgb.disabled=true;status('Iniciando…');post('beta:rollback')};
+  if(!armed){armed=true;rb.textContent=t('b.stable.ok');cn.style.display='';return}
+  rb.disabled=cn.disabled=chk.disabled=cfgb.disabled=true;status(t('b.starting'));post('beta:rollback')};
  cn.onclick=reset;box.appendChild(cn);box.appendChild(rb);
- row(c2,'Versão normal','Instala a versão estável em segundo plano e reinicia o app. Seu login e suas configurações ficam salvos.',box);
+ row(c2,t('b.stable'),t('b.stable.s2'),box);
  root.appendChild(h('h2','','Discord Rich Presence'));
  var c3=h('div','c');root.appendChild(c3);
  var rsw=toggle(S.rpc,function(v){post('rpcui:'+(v?'on':'off'))});
- row(c3,'Mostrar \u201cOuvindo\u2026\u201d no Discord','Status ao ligar: '+S.rpcStatus,rsw);
- var rcf=h('button','btn o','Configurar');rcf.onclick=function(){post('rpcui:config')};
- row(c3,'Configurações do Rich Presence','ID do aplicativo, link e token do bot',rcf);
+ row(c3,t('b.rpc.on'),t('b.rpc.status',S.rpcStatus),rsw);
+ var rcf=h('button','btn o',t('b.rpc.cfg.b'));rcf.onclick=function(){post('rpcui:config')};
+ row(c3,t('b.rpc.cfg'),t('b.rpc.cfg.s'),rcf);
  var st=h('div');st.id='az-st';root.appendChild(st);
  function status(t){st.style.display='block';st.textContent=t}
- window.__azBeta={status:status,check:upd,offline:function(v){S.offline=!!v;osw.set(S.offline)}};
+ window.__azBeta={status:status,check:upd,news:news,offline:function(v){S.offline=!!v;osw.set(S.offline)}};
  w.insertBefore(root,w.querySelector('.ft'));
 }catch(e){}})(@STATE@);
 """;
@@ -581,8 +700,8 @@ public partial class MainForm
     // Fundo animado estilo Windows 11 ("bloom" em movimento + vidro fosco) e textos com efeito de digitação
     const string BetaWelcomeHtml = """
 <!doctype html><html lang="pt-BR" data-theme="dark"><head><meta charset="utf-8"><title>Azul Groove — Configuração</title><meta name="color-scheme" content="dark light"><style>
-:root{--bg:#0a0c13;--card:rgba(20,23,36,.58);--bd:rgba(255,255,255,.13);--tx:#f3f5fb;--mu:#a3abc0;--ac:#6d7cff;--ac2:#9a6bff;--in:rgba(255,255,255,.08);--bl:.7;--pop:#1b1f2e}
-html[data-theme=light]{--bg:#eaeefb;--card:rgba(255,255,255,.62);--bd:rgba(0,0,0,.08);--tx:#151823;--mu:#5b6277;--in:rgba(0,0,0,.05);--bl:.55;--pop:#fbfcff}
+:root{--bg:#0a0c13;--card:rgba(20,23,36,.58);--bd:rgba(255,255,255,.13);--tx:#f3f5fb;--mu:#a3abc0;--ac:#6d7cff;--ac2:#9a6bff;--in:rgba(255,255,255,.08);--bl:.7;--pop:#1b1f2e;--scroll-thumb:rgba(163,171,192,.55);--scroll-thumb-hover:#8a91ff}
+html[data-theme=light]{--bg:#eaeefb;--card:rgba(255,255,255,.62);--bd:rgba(0,0,0,.08);--tx:#151823;--mu:#5b6277;--in:rgba(0,0,0,.05);--bl:.55;--pop:#fbfcff;--scroll-thumb:rgba(91,98,119,.48);--scroll-thumb-hover:#5865f2}
 *{box-sizing:border-box}
 html,body{height:100%;margin:0;overflow:hidden;background:var(--bg);color:var(--tx);font-family:"Segoe UI Variable","Segoe UI",system-ui,sans-serif;transition:background .5s}
 .bg{position:fixed;inset:0;overflow:hidden}
@@ -596,7 +715,7 @@ html,body{height:100%;margin:0;overflow:hidden;background:var(--bg);color:var(--
 @keyframes d3{to{transform:translate(200px,-200px) scale(1.15)}}
 @keyframes d4{to{transform:translate(-220px,-160px) scale(1.25)}}
 .wrap{position:relative;height:100%;display:flex;align-items:center;justify-content:center;padding:22px}
-.card{width:100%;max-width:620px;min-height:420px;padding:34px 38px 24px;border-radius:24px;background:var(--card);border:1px solid var(--bd);backdrop-filter:blur(30px) saturate(1.5);box-shadow:0 24px 80px rgba(0,0,0,.35);display:flex;flex-direction:column;animation:cin .7s cubic-bezier(.2,.9,.3,1) both}
+.card{position:relative;width:100%;max-width:620px;min-height:420px;padding:54px 38px 24px;border-radius:24px;background:var(--card);border:1px solid var(--bd);backdrop-filter:blur(30px) saturate(1.5);box-shadow:0 24px 80px rgba(0,0,0,.35);display:flex;flex-direction:column;animation:cin .7s cubic-bezier(.2,.9,.3,1) both}
 @keyframes cin{from{opacity:0;transform:translateY(24px) scale(.97)}}
 .step{display:none;flex:1;flex-direction:column;gap:14px}
 .step.on{display:flex;animation:st .45s ease both}
@@ -651,9 +770,18 @@ button.pri:disabled{opacity:.4;cursor:default;transform:none}
 button.gh{border:0;background:transparent;color:var(--mu);padding:10px 12px;border-radius:10px;font:inherit;font-size:13px;cursor:pointer}
 button.gh:hover{color:var(--tx);background:var(--in)}
 @media (prefers-reduced-motion:reduce){.bg i{animation:none}}
+.lgw{position:absolute;top:14px;right:16px;z-index:30}.lgw .dd{min-width:0;width:auto}
+.lgw .ddb{width:auto;padding:6px 30px 6px 12px;border-radius:30px;font-size:12.5px;white-space:nowrap}
+.lgw .ddl{bottom:auto;top:calc(100% + 6px);left:auto;right:0;min-width:210px;max-height:min(320px,calc(100vh - 80px));overflow:auto}
+html[dir=rtl] .lgw{right:auto;left:16px}html[dir=rtl] .lgw .ddb{padding:6px 12px 6px 30px}html[dir=rtl] .lgw .ddb::after{right:auto;left:12px}
+html[dir=rtl] .lgw .ddl{right:auto;left:0}html[dir=rtl] .ddl{text-align:right}
+html[dir=rtl] .sw::after{left:auto;right:3px}html[dir=rtl] .sw.on::after{left:auto;right:23px}
+html[dir=rtl] .ddb{text-align:right;padding:8px 12px 8px 32px}html[dir=rtl] .ddb::after{right:auto;left:12px}
+@DD_SCROLL@
 </style></head><body>
 <div class="bg"><i></i><i></i><i></i><i></i></div>
 <div class="wrap"><div class="card">
+ <div class="lgw"><div class="dd" id="lang"></div></div>
  <section class="step on" id="s0">
   <div class="logo"><i></i><i></i><i></i><i></i><i></i></div>
   <span class="badge">BETA @VER@</span>
@@ -661,39 +789,41 @@ button.gh:hover{color:var(--tx);background:var(--in)}
  </section>
  <section class="step" id="s1">
   <h2 id="t1"></h2><p class="sub" id="u1"></p>
-  <input id="name" maxlength="40" placeholder="Seu nome" autocomplete="off" spellcheck="false">
-  <p class="sub" style="min-height:0;margin-top:6px">Você usa o Azul Groove como…</p>
+  <input id="name" maxlength="40" data-ph="name.ph" autocomplete="off" spellcheck="false">
+  <p class="sub" style="min-height:0;margin-top:6px" data-i="use"></p>
   <div class="chips" id="types"></div>
  </section>
  <section class="step" id="s2">
   <h2 id="t2"></h2>
-  <div class="row"><div><b>Tema</b><small>Escuro é o padrão</small></div>
-   <div class="seg" id="segTheme"><button data-v="auto">Auto</button><button data-v="light">Claro</button><button data-v="dark">Escuro</button></div></div>
-  <div class="row"><div><b>Ao abrir o app, mostrar</b><small>Sua página inicial</small></div>
-   <div class="seg" id="segStart"><button data-v="panel">Painel</button><button data-v="site">Site</button></div></div>
-  <div class="row"><div><b>Atalho para abrir o chat</b><small>Funciona mesmo com o app minimizado</small></div>
+  <div class="row"><div><b data-i="theme"></b></div>
+   <div class="seg" id="segTheme"><button data-v="auto" data-i="th.auto"></button><button data-v="light" data-i="th.light"></button><button data-v="dark" data-i="th.dark"></button></div></div>
+  <div class="row"><div><b data-i="start"></b></div>
+   <div class="seg" id="segStart"><button data-v="panel" data-i="st.panel"></button><button data-v="site" data-i="st.site"></button></div></div>
+  <div class="row"><div><b data-i="hk"></b><small data-i="hk.sub"></small></div>
    <div class="ctl"><div class="dd" id="preset"></div><div class="sw on" id="swHk"></div></div></div>
-  <div class="row"><div><b>Atualização automática</b><small>Avisa quando sair uma versão nova</small></div>
-   <div class="ctl"><button class="gh" id="chk">Verificar agora</button><div class="sw on" id="swAuto"></div></div></div>
+  <div class="row"><div><b data-i="upd"></b><small data-i="upd.sub"></small></div>
+   <div class="ctl"><button class="gh" id="chk" data-i="chk"></button><div class="sw on" id="swAuto"></div></div></div>
  </section>
  <section class="step" id="s3">
   <h2 id="t3"></h2><p class="sub" id="u3"></p>
   <div class="sum" id="sum"></div>
  </section>
  <div class="nav">
-  <div><button class="gh" id="skip">Pular</button><button class="gh" id="back">Voltar</button></div>
+  <div><button class="gh" id="skip" data-i="n.skip"></button><button class="gh" id="back" data-i="n.back"></button></div>
   <div class="dots"><b class="on"></b><b></b><b></b><b></b></div>
-  <div><button class="pri" id="next">Começar</button></div>
+  <div><button class="pri" id="next"></button></div>
  </div>
 </div></div>
 <script>
 var PRESETS=@PRESETS@;
-var TYPES=[['🎧','Ouvinte'],['🎛️','DJ / Produtor'],['📺','Streamer'],['👑','Dono de servidor'],['✨','Outro']];
-var THEMES={auto:0,light:1,dark:2},THEME_NAMES={auto:'Automático',light:'Claro',dark:'Escuro'};
-var S={step:0,name:'',type:'Ouvinte',theme:'dark',start:'panel',hk:true,preset:0,auto:true};
+var TYPES=[['🎧','Ouvinte','ty.listener'],['🎛️','DJ / Produtor','ty.dj'],['📺','Streamer','ty.streamer'],['👑','Dono de servidor','ty.owner'],['✨','Outro','ty.other']];
+var THEMES={auto:0,light:1,dark:2};
+var LANGS=@LANGS@,LANGLIST=@LANGLIST@;
+var S={step:0,name:'',type:'Ouvinte',theme:'dark',start:'panel',hk:true,preset:0,auto:true,lang:'@LANG@'};
 var INIT=@INIT@;if(INIT){for(var k in INIT){if(INIT[k]!==''&&INIT[k]!=null)S[k]=INIT[k]}}
 var $=function(i){return document.getElementById(i)};
 var mq=matchMedia('(prefers-color-scheme: light)');
+@DD_HELPER@
 function applyTheme(){var t=S.theme==='auto'?(mq.matches?'light':'dark'):S.theme;document.documentElement.setAttribute('data-theme',t)}
 function send(o){try{window.chrome.webview.postMessage(JSON.stringify(o))}catch(e){}}
 function typeText(el,text,speed,done){
@@ -707,15 +837,31 @@ function seg(id,key,cb){
  bs.forEach(function(b){b.onclick=function(){S[key]=b.getAttribute('data-v');mark();if(cb)cb()}});mark();
 }
 function sw(id,key,cb){var e=$(id);e.onclick=function(){S[key]=!S[key];e.classList.toggle('on',S[key]);if(cb)cb()}}
-TYPES.forEach(function(t){
- var c=document.createElement('div');c.className='chip'+(t[1]===S.type?' sel':'');c.textContent=t[0]+'  '+t[1];
- c.onclick=function(){S.type=t[1];document.querySelectorAll('.chip').forEach(function(x){x.classList.remove('sel')});c.classList.add('sel')};
- $('types').appendChild(c);
-});
+// ---- idiomas: textos vêm de LANGS[código]; o que faltar cai para o inglês ----
+function tr(k){var d=LANGS[S.lang]||{},e=LANGS.en||{};return d[k]!=null?d[k]:(e[k]!=null?e[k]:k)}
+function langInfo(){for(var i=0;i<LANGLIST.length;i++)if(LANGLIST[i].code===S.lang)return LANGLIST[i];return LANGLIST[0]||{code:'en',name:'English',rtl:false}}
+function buildTypes(){var box=$('types');box.innerHTML='';
+ TYPES.forEach(function(t){
+  var c=document.createElement('div');c.className='chip'+(t[1]===S.type?' sel':'');c.textContent=t[0]+'  '+tr(t[2]);
+  c.onclick=function(){S.type=t[1];document.querySelectorAll('.chip').forEach(function(x){x.classList.remove('sel')});c.classList.add('sel')};
+  box.appendChild(c)})}
+function langMark(){var box=$('lang');box.querySelector('.ddb').textContent='\uD83C\uDF10  '+langInfo().name;
+ box.querySelectorAll('.ddo').forEach(function(o){o.classList.toggle('sel',o.getAttribute('data-c')===S.lang)})}
+function applyLang(){var li=langInfo();
+ document.documentElement.lang=li.code;document.documentElement.dir=li.rtl?'rtl':'ltr';
+ document.querySelectorAll('[data-i]').forEach(function(e){e.textContent=tr(e.getAttribute('data-i'))});
+ document.querySelectorAll('[data-ph]').forEach(function(e){e.placeholder=tr(e.getAttribute('data-ph'))});
+ buildTypes();langMark()}
+function langInit(){var box=$('lang');box.innerHTML='';var bt=document.createElement('button');bt.type='button';bt.className='ddb';
+ var l=document.createElement('div');l.className='ddl';
+ LANGLIST.forEach(function(x){var o=document.createElement('div');o.className='ddo';o.textContent=x.name;o.setAttribute('data-c',x.code);
+  o.onclick=function(e){e.stopPropagation();S.lang=x.code;box.classList.remove('open');applyLang();enter(S.step)};l.appendChild(o)});
+ bt.onclick=function(e){e.stopPropagation();var open=box.classList.contains('open');box.classList.toggle('open',!open);if(!open)fitDropdown(box,l,320)};box.appendChild(bt);box.appendChild(l);wireDropdownKeyboard(box,bt,l);
+ document.addEventListener('click',function(){box.classList.remove('open')})}
 function ddMark(){var box=$('preset');box.querySelector('.ddb').textContent=PRESETS[S.preset];box.querySelectorAll('.ddo').forEach(function(o,i){o.classList.toggle('sel',i===S.preset)});box.classList.toggle('dis',!S.hk)}
 function ddInit(){var box=$('preset');box.innerHTML='';var bt=document.createElement('button');bt.type='button';bt.className='ddb';var l=document.createElement('div');l.className='ddl';
  PRESETS.forEach(function(p,i){var o=document.createElement('div');o.className='ddo';o.textContent=p;o.onclick=function(e){e.stopPropagation();S.preset=i;ddMark();box.classList.remove('open')};l.appendChild(o)});
- bt.onclick=function(e){e.stopPropagation();box.classList.toggle('open')};box.appendChild(bt);box.appendChild(l);
+ bt.onclick=function(e){e.stopPropagation();box.classList.toggle('open')};box.appendChild(bt);box.appendChild(l);wireDropdownKeyboard(box,bt,l);
  document.addEventListener('click',function(){box.classList.remove('open')});ddMark()}
 ddInit();
 seg('segTheme','theme',applyTheme);seg('segStart','start');
@@ -730,33 +876,33 @@ function enter(n){
  document.querySelectorAll('.dots b').forEach(function(b,i){b.classList.toggle('on',i===n)});
  $('skip').style.display=n===0?'':'none';
  $('back').style.display=n>0?'':'none';
- $('next').textContent=['Começar','Continuar','Continuar','Abrir o Azul Groove'][n];
+ $('next').textContent=tr(['n.begin','n.cont','n.cont','n.open'][n]);
  check();
- if(n===0)typeText($('t0'),'Olá! Bem-vindo ao Azul Groove',45,function(){typeText($('u0'),'Vamos deixar tudo com a sua cara — leva menos de um minuto.',22)});
- if(n===1){typeText($('t1'),'Como podemos te chamar?',40,function(){typeText($('u1'),'Usamos o seu nome para te receber toda vez que abrir o app.',20)});setTimeout(function(){$('name').focus()},350)}
- if(n===2)typeText($('t2'),'Configuração básica',40);
+ if(n===0)typeText($('t0'),tr('hello'),45,function(){typeText($('u0'),tr('hello.sub'),22)});
+ if(n===1){typeText($('t1'),tr('name.t'),40,function(){typeText($('u1'),tr('name.sub'),20)});setTimeout(function(){$('name').focus()},350)}
+ if(n===2)typeText($('t2'),tr('basic'),40);
  if(n===3){
   var nm=S.name.trim();
-  typeText($('t3'),'Tudo pronto, '+nm+'!',45,function(){typeText($('u3'),'Aproveite o Azul Groove Beta.',22)});
+  typeText($('t3'),tr('done.t').replace('{name}',nm),45,function(){typeText($('u3'),tr('done.sub'),22)});
   var sm=$('sum');sm.innerHTML='';
   sm.appendChild(line('👤  '+nm+'  ·  '+S.type));
-  sm.appendChild(line('🎨  Tema: '+THEME_NAMES[S.theme]));
-  sm.appendChild(line('🏠  Ao abrir: '+(S.start==='site'?'Site':'Painel')));
-  sm.appendChild(line('⌨️  Atalho: '+(S.hk?PRESETS[S.preset]:'desligado')));
-  sm.appendChild(line('🔄  Atualização automática: '+(S.auto?'ligada':'desligada')));
+  sm.appendChild(line('🎨  '+tr('theme')+': '+tr('th.'+S.theme)));
+  sm.appendChild(line('🏠  '+tr('start')+': '+tr(S.start==='site'?'st.site':'st.panel')));
+  sm.appendChild(line('⌨️  '+tr('hk')+': '+(S.hk?PRESETS[S.preset]:tr('v.off'))));
+  sm.appendChild(line('🔄  '+tr('upd')+': '+tr(S.auto?'v.on':'v.off')));
  }
 }
 $('next').onclick=function(){
  if(S.step<3){enter(S.step+1);return}
  $('next').disabled=true;
- send({kind:'done',name:S.name.trim(),type:S.type,theme:THEMES[S.theme],start:S.start==='site'?1:0,hk:S.hk,preset:S.preset,auto:S.auto});
+ send({kind:'done',name:S.name.trim(),type:S.type,theme:THEMES[S.theme],start:S.start==='site'?1:0,hk:S.hk,preset:S.preset,auto:S.auto,lang:S.lang});
 };
 $('back').onclick=function(){if(S.step>0)enter(S.step-1)};
 $('skip').onclick=function(){send({kind:'skip'})};
 document.addEventListener('keydown',function(e){if(e.key==='Enter'&&!$('next').disabled)$('next').click()});
 mq.addEventListener('change',applyTheme);
 $('name').value=S.name;$('swHk').classList.toggle('on',S.hk);$('swAuto').classList.toggle('on',S.auto);ddMark();
-applyTheme();enter(0);
+langInit();applyLang();applyTheme();enter(0);
 </script></body></html>
 """;
 }

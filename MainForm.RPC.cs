@@ -32,12 +32,12 @@ public partial class MainForm
     const string RpcProtocolVersion = "2.6.2";
 
     readonly RpcSettings rpcCfg = RpcSettings.Load();
-    ToolStripMenuItem miRpc = null!, miRpcOn = null!, miRpcStatus = null!;
+    ToolStripMenuItem miRpc = null!, miRpcOn = null!, miRpcStatus = null!, miRpcCfg = null!;
     CancellationTokenSource? rpcCts;
     DiscordIpc? rpcIpc;                       // conexão principal (APP_ID padrão/customizado): usuário + site
     string rpcMainAppId = "";
     readonly Dictionary<string, DiscordIpc> rpcBots = new(); // uma conexão por bot (app id = id do bot)
-    volatile string rpcStatus = "Desligado";
+    volatile string rpcStatus = "";
     volatile string rpcNow = "";   // o que está aparecendo na presence agora (mostrado na janela de configuração)
 
     void RpcApply(DiscordIpc ipc, JsonObject? activity)
@@ -93,9 +93,9 @@ public partial class MainForm
         var cts = rpcCts = new CancellationTokenSource();
         rpcMainAppId = rpcCfg.EffectiveAppId;
         var ipc = rpcIpc = new DiscordIpc(rpcMainAppId);
-        ipc.Status += s => rpcStatus = s;
-        ipc.Ready += (id, name) => rpcStatus = $"Conectado ao Discord ({name})";
-        rpcStatus = "Procurando o Discord…";
+        ipc.Status += s => rpcStatus = s.StartsWith("rpc.", StringComparison.Ordinal) ? Tr(s) : s;
+        ipc.Ready += (id, name) => rpcStatus = TrF("rpc.connected", name);
+        rpcStatus = Tr("rpc.search");
         ipc.Start();
 
         if (rpcCfg.WsUrl.Length > 0)
@@ -119,22 +119,31 @@ public partial class MainForm
     // ================= Menu da bandeja =================
     ToolStripMenuItem RpcMenuItem()
     {
-        miRpcOn = new ToolStripMenuItem("Ativar Rich Presence") { CheckOnClick = true, Checked = rpcCfg.On };
+        miRpcOn = new ToolStripMenuItem(Tr("tray.rpc.on")) { CheckOnClick = true, Checked = rpcCfg.On };
         miRpcOn.CheckedChanged += (_, _) =>
         {
             rpcCfg.On = miRpcOn.Checked;
             rpcCfg.Save();
-            if (!rpcCfg.On) { RpcStop(); rpcStatus = "Desligado"; return; }
+            if (!rpcCfg.On) { RpcStop(); rpcStatus = Tr("rpc.off"); return; }
             RpcStart();
         };
 
-        var miCfg = new ToolStripMenuItem("Configurar…", null, (_, _) => ShowRpcSettings());
-        miRpcStatus = new ToolStripMenuItem("Status: " + rpcStatus) { Enabled = false };
+        miRpcCfg = new ToolStripMenuItem(Tr("tray.rpc.cfg"), null, (_, _) => ShowRpcSettings());
+        miRpcStatus = new ToolStripMenuItem(TrF("tray.rpc.status", rpcStatus)) { Enabled = false };
 
-        miRpc = new ToolStripMenuItem("Discord Rich Presence");
-        miRpc.DropDownItems.AddRange(new ToolStripItem[] { miRpcOn, miCfg, new ToolStripSeparator(), miRpcStatus });
-        miRpc.DropDownOpening += (_, _) => miRpcStatus.Text = "Status: " + rpcStatus; // atualiza o texto ao abrir o menu
+        miRpc = new ToolStripMenuItem("Discord Rich Presence"); // nome do produto: igual em todos os idiomas
+        miRpc.DropDownItems.AddRange(new ToolStripItem[] { miRpcOn, miRpcCfg, new ToolStripSeparator(), miRpcStatus });
+        miRpc.DropDownOpening += (_, _) => miRpcStatus.Text = TrF("tray.rpc.status", rpcStatus); // atualiza o texto ao abrir o menu
         return miRpc;
+    }
+
+    // Troca ao vivo os textos do submenu quando o idioma muda (o texto do status em si é da etapa 3)
+    void RpcTrayRetranslate()
+    {
+        if (miRpcOn == null) return;
+        miRpcOn.Text = Tr("tray.rpc.on");
+        miRpcCfg.Text = Tr("tray.rpc.cfg");
+        miRpcStatus.Text = TrF("tray.rpc.status", rpcStatus);
     }
 
     // ================= Comandos do PAINEL local (liga/desliga e Configurar) =================
@@ -144,19 +153,8 @@ public partial class MainForm
         string? t;
         try { t = e.TryGetWebMessageAsString(); } catch { return false; }
         if (t == null || !t.StartsWith("rpcui:", StringComparison.Ordinal)) return false;
-        if (e.Source.StartsWith("http", StringComparison.OrdinalIgnoreCase)) return true;
-
-        BeginInvoke(() =>
-        {
-            switch (t)
-            {
-                case "rpcui:on": if (!miRpcOn.Checked) miRpcOn.Checked = true; break;
-                case "rpcui:off": if (miRpcOn.Checked) miRpcOn.Checked = false; break;
-                case "rpcui:config": ShowRpcSettings(); break;
-            }
-            // redesenha o bloco do painel com o estado real (ex.: o usuário cancelou a janela)
-            if (panelActive && !IsDisposed) _ = BetaInjectPanelAsync();
-        });
+        if (e.Source.StartsWith("http", StringComparison.OrdinalIgnoreCase) || t.Length > 16000) return true;
+        BeginInvoke(() => RpcUiDispatch(t)); // tratado em MainForm_RpcUi.cs
         return true;
     }
 
@@ -179,7 +177,7 @@ public partial class MainForm
         {
             using var doc = JsonDocument.Parse(t[4..]);
             if (doc.RootElement.ValueKind != JsonValueKind.Object) return true;
-            if (RpcMapper.TryBuild(doc.RootElement, rpcCfg, ipc.UserId, "", out var activity)) RpcApply(ipc, activity);
+            if (RpcMapper.TryBuild(doc.RootElement, rpcCfg, ipc.UserId, "", Tr, out var activity)) RpcApply(ipc, activity);
         }
         catch { /* mensagem inválida: ignora */ }
         return true;
@@ -196,7 +194,7 @@ public partial class MainForm
                 if (!Uri.TryCreate(rpcCfg.WsUrl, UriKind.Absolute, out var uri) ||
                     (uri.Scheme != "ws" && uri.Scheme != "wss"))
                 {
-                    rpcStatus = "Link do websocket inválido (use ws:// ou wss://)";
+                    rpcStatus = Tr("rpc.invalid");
                     return;
                 }
 
@@ -206,7 +204,7 @@ public partial class MainForm
 
                 using var ws = new ClientWebSocket();
                 ws.Options.KeepAliveInterval = TimeSpan.FromSeconds(30);
-                rpcStatus = "Conectando ao bot…";
+                rpcStatus = Tr("rpc.connecting");
                 using (var to = CancellationTokenSource.CreateLinkedTokenSource(ct))
                 {
                     to.CancelAfter(TimeSpan.FromSeconds(20));
@@ -224,7 +222,7 @@ public partial class MainForm
                 };
                 await ws.SendAsync(new ArraySegment<byte>(Encoding.UTF8.GetBytes(hello.ToJsonString())),
                                    WebSocketMessageType.Text, true, ct);
-                rpcStatus = "Conectado ao Discord e ao bot";
+                rpcStatus = Tr("rpc.botConnected");
                 delay = 7;
 
                 var buf = new byte[16 * 1024];
@@ -248,13 +246,13 @@ public partial class MainForm
 
                 RpcClearAll(ipc);
                 if (fatal) return; // o bot mandou "disconnect" (ex.: token inválido): não fica tentando de novo
-                rpcStatus = $"Conexão com o bot encerrada — nova tentativa em {delay}s";
+                rpcStatus = TrF("rpc.botClosed", delay);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { return; }
             catch (Exception)
             {
                 RpcClearAll(ipc);
-                rpcStatus = $"Bot indisponível — nova tentativa em {delay}s";
+                rpcStatus = TrF("rpc.botUnavailable", delay);
             }
 
             try { await Task.Delay(TimeSpan.FromSeconds(delay), ct); }
@@ -283,12 +281,12 @@ public partial class MainForm
             var op = RpcMapper.Str(root, "op");
             if (op == "disconnect")
             {
-                rpcStatus = "O bot encerrou a conexão: " + RpcMapper.Str(root, "reason");
+                rpcStatus = TrF("rpc.botStopped", RpcMapper.Str(root, "reason"));
                 return true;
             }
             if (op == "exception")
             {
-                rpcStatus = "Erro do bot: " + RpcMapper.Str(root, "message");
+                rpcStatus = TrF("rpc.botError", RpcMapper.Str(root, "message"));
                 return false;
             }
 
@@ -302,7 +300,7 @@ public partial class MainForm
             var target = RpcIpcFor(appId);
             if (target == null) return false;
 
-            if (RpcMapper.TryBuild(root, rpcCfg, ipc.UserId, botId, out var activity)) RpcApply(target, activity);
+            if (RpcMapper.TryBuild(root, rpcCfg, ipc.UserId, botId, Tr, out var activity)) RpcApply(target, activity);
         }
         catch { /* ignora mensagem quebrada */ }
         return false;
@@ -315,11 +313,12 @@ public partial class MainForm
         if (!RpcSettings.ValidAppId(appId)) return (false, "O ID deve ter só números (17 a 20 dígitos).");
         // já está rodando com esse mesmo ID: usa o estado real (uma 2ª conexão limparia a presence atual)
         if (rpcCfg.On && rpcIpc != null && appId == rpcMainAppId)
-            return (rpcStatus.StartsWith("Conectado"), rpcStatus);
+            return (rpcStatus == Tr("rpc.botConnected") ||
+                rpcStatus.StartsWith(Tr("rpc.connected").Split('(')[0].TrimEnd(), StringComparison.Ordinal), rpcStatus);
 
         var ipc = new DiscordIpc(appId);
         var tcs = new TaskCompletionSource<(bool, string)>();
-        ipc.Ready += (_, name) => tcs.TrySetResult((true, "Tudo certo! Conectado ao Discord como " + name + "."));
+        ipc.Ready += (_, name) => tcs.TrySetResult((true, TrF("rpc.connected", name)));
         ipc.Status += st => tcs.TrySetResult((false, st));
         ipc.Start();
         try
@@ -330,286 +329,6 @@ public partial class MainForm
         finally { await Task.Run(() => ipc.Close()); }
     }
 
-    void ShowRpcSettings()
-    {
-        bool dark = cfg.Theme == 1 ? false : cfg.Theme == 2 ? true : WindowsIsDark();
-        var bg = dark ? Color.FromArgb(24, 27, 36) : Color.FromArgb(246, 248, 252);
-        var card = dark ? Color.FromArgb(31, 35, 48) : Color.White;
-        var fg = dark ? Color.FromArgb(235, 238, 247) : Color.FromArgb(28, 32, 48);
-        var mute = dark ? Color.FromArgb(150, 158, 180) : Color.FromArgb(100, 108, 130);
-        var fieldBg = dark ? Color.FromArgb(40, 45, 62) : Color.FromArgb(240, 243, 249);
-        var line = dark ? Color.FromArgb(48, 54, 72) : Color.FromArgb(226, 230, 240);
-        var accent = Color.FromArgb(88, 135, 255);
-
-        using var f = new Form
-        {
-            Text = "Discord Rich Presence",
-            FormBorderStyle = FormBorderStyle.FixedDialog,
-            StartPosition = FormStartPosition.CenterScreen,
-            MaximizeBox = false, MinimizeBox = false, TopMost = true,
-            ClientSize = new Size(500, 542),
-            BackColor = bg, ForeColor = fg,
-            Font = new Font("Segoe UI", 9.5f),
-            Icon = Icon
-        };
-
-        Label Txt(string t, int x, int y, int w, int h, Color c, float size = 9.5f, bool bold = false) => new()
-        {
-            Text = t, Left = x, Top = y, Width = w, Height = h, ForeColor = c, BackColor = Color.Transparent,
-            Font = new Font("Segoe UI", size, bold ? FontStyle.Bold : FontStyle.Regular)
-        };
-        // Campo sem borda preta: um painel colorido com o TextBox dentro
-        TextBox Field(Control parent, int x, int y, int w, string value, bool secret = false)
-        {
-            var wrap = new Panel { Left = x, Top = y, Width = w, Height = 30, BackColor = fieldBg };
-            var tb = new TextBox
-            {
-                Left = 10, Top = 6, Width = w - 20, Text = value, BackColor = fieldBg, ForeColor = fg,
-                BorderStyle = BorderStyle.None, UseSystemPasswordChar = secret
-            };
-            wrap.Controls.Add(tb);
-            wrap.Click += (_, _) => tb.Focus();
-            parent.Controls.Add(wrap);
-            return tb;
-        }
-        Button Btn(string t, int x, int y, int w, bool primary)
-        {
-            var b = new Button
-            {
-                Text = t, Left = x, Top = y, Width = w, Height = 30, FlatStyle = FlatStyle.Flat, Cursor = Cursors.Hand,
-                BackColor = primary ? accent : fieldBg, ForeColor = primary ? Color.White : fg
-            };
-            b.FlatAppearance.BorderSize = 0;
-            b.FlatAppearance.MouseOverBackColor = primary ? Color.FromArgb(112, 152, 255) : line;
-            return b;
-        }
-        CheckBox Opt(Control parent, string t, bool v, int y)
-        {
-            var cb = new CheckBox { Text = t, Left = 20, Top = y, Width = 428, Height = 26, Checked = v, ForeColor = fg, BackColor = Color.Transparent };
-            parent.Controls.Add(cb);
-            return cb;
-        }
-        void Divider(Control parent, int y) =>
-            parent.Controls.Add(new Panel { Left = 20, Top = y, Width = 428, Height = 1, BackColor = line });
-
-        // ---- Estado ao vivo (sempre visível no topo) ----
-        var st = new Panel { Left = 16, Top = 14, Width = 468, Height = 64, BackColor = card };
-        f.Controls.Add(st);
-        var dot = new Label { Left = 20, Top = 15, Width = 12, Height = 12, BackColor = Color.Gray };
-        var gp = new System.Drawing.Drawing2D.GraphicsPath();
-        gp.AddEllipse(0, 0, 12, 12);
-        dot.Region = new Region(gp);
-        var stTxt = Txt("", 42, 9, 410, 22, fg, 10f, true);
-        var nowTxt = Txt("", 42, 34, 410, 22, mute);
-        st.Controls.AddRange(new Control[] { dot, stTxt, nowTxt });
-        void RefreshState()
-        {
-            var s = rpcStatus;
-            dot.BackColor = s.StartsWith("Conectado") ? Color.FromArgb(67, 181, 129)
-                : s == "Desligado" ? Color.Gray
-                : s.StartsWith("Procurando") || s.StartsWith("Conectando") ? Color.FromArgb(240, 178, 50)
-                : Color.FromArgb(237, 66, 69);
-            stTxt.Text = s;
-            nowTxt.Text = rpcNow.Length > 0 ? "♪  " + rpcNow : "Nada tocando na presence agora";
-        }
-        RefreshState();
-        var tm = new System.Windows.Forms.Timer { Interval = 1000 };
-        tm.Tick += (_, _) => RefreshState();
-        tm.Start();
-
-        // ---- Abas (sem rolagem) ----
-        var tabsBar = new Panel { Left = 16, Top = 88, Width = 468, Height = 36, BackColor = bg };
-        f.Controls.Add(tabsBar);
-        var underline = new Panel { Top = 33, Height = 3, Width = 156, BackColor = accent };
-        string[] tabNames = { "Conexão", "Opções", "Imagens" };
-        var tabBtns = new Button[3];
-        var pages = new Panel[3];
-        for (int i = 0; i < 3; i++)
-        {
-            var tabBtn = new Button
-            {
-                Text = tabNames[i], Left = i * 156, Top = 0, Width = 156, Height = 33, FlatStyle = FlatStyle.Flat,
-                Cursor = Cursors.Hand, BackColor = bg, ForeColor = mute, TabStop = false,
-                Font = new Font("Segoe UI", 10f, FontStyle.Bold)
-            };
-            tabBtn.FlatAppearance.BorderSize = 0;
-            tabBtn.FlatAppearance.MouseOverBackColor = card;
-            tabBtn.FlatAppearance.MouseDownBackColor = card;
-            tabBtns[i] = tabBtn;
-            tabsBar.Controls.Add(tabBtn);
-
-            var pg = new Panel { Left = 16, Top = 124, Width = 468, Height = 346, BackColor = card, Visible = false };
-            pages[i] = pg;
-            f.Controls.Add(pg);
-        }
-        tabsBar.Controls.Add(underline);
-        underline.BringToFront();
-        void SelectTab(int idx)
-        {
-            for (int j = 0; j < 3; j++)
-            {
-                pages[j].Visible = j == idx;
-                tabBtns[j].ForeColor = j == idx ? fg : mute;
-            }
-            underline.Left = idx * 156;
-        }
-        for (int i = 0; i < 3; i++) { int k = i; tabBtns[k].Click += (_, _) => SelectTab(k); }
-
-        // ================= Aba 1 · Conexão =================
-        var pg1 = pages[0];
-        pg1.Controls.Add(Txt("Aplicativo do Discord", 20, 14, 300, 22, fg, 10f, true));
-        var lnkPortal = new LinkLabel
-        {
-            Text = "Abrir portal", Left = 348, Top = 14, Width = 100, Height = 22, TextAlign = ContentAlignment.MiddleRight,
-            LinkColor = accent, ActiveLinkColor = accent, BackColor = Color.Transparent
-        };
-        lnkPortal.Click += (_, _) =>
-        {
-            try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("https://discord.com/developers/applications") { UseShellExecute = true }); } catch { }
-        };
-        pg1.Controls.Add(lnkPortal);
-        pg1.Controls.Add(Txt("Não precisa configurar nada: o app já usa um ID padrão. Só use o seu se quiser — " +
-                             "o nome do aplicativo aparece como “Ouvindo …”.", 20, 38, 428, 36, mute, 8.75f));
-        var cbOver = Opt(pg1, "Usar APP_ID customizado", rpcCfg.OverrideAppId, 78);
-        var tbApp = Field(pg1, 20, 106, 428, rpcCfg.AppId);
-        void ApplyAppState() { tbApp.ReadOnly = !cbOver.Checked; tbApp.ForeColor = cbOver.Checked ? fg : mute; }
-        ApplyAppState();
-        cbOver.CheckedChanged += (_, _) => ApplyAppState();
-        var btnTest = Btn("Testar conexão", 20, 146, 130, true);
-        var testRes = Txt("", 160, 151, 288, 22, mute, 8.75f);
-        pg1.Controls.AddRange(new Control[] { btnTest, testRes });
-        btnTest.Click += async (_, _) =>
-        {
-            btnTest.Enabled = false; testRes.ForeColor = mute; testRes.Text = "Testando…";
-            var id = cbOver.Checked ? tbApp.Text.Trim().Replace(" ", "") : RpcSettings.DummyAppId;
-            var (ok, msg) = await RpcTestAsync(id);
-            if (f.IsDisposed) return;
-            testRes.ForeColor = ok ? Color.FromArgb(67, 181, 129) : Color.FromArgb(237, 66, 69);
-            testRes.Text = (ok ? "✔ " : "✖ ") + msg;
-            btnTest.Enabled = true;
-        };
-
-        Divider(pg1, 188);
-
-        pg1.Controls.Add(Txt("Bot de música (opcional)", 20, 198, 428, 22, fg, 10f, true));
-        pg1.Controls.Add(Txt("Link do websocket — ex.: ws://localhost/ws", 20, 222, 428, 20, mute, 8.75f));
-        var tbUrl = Field(pg1, 20, 242, 428, rpcCfg.WsUrl);
-        pg1.Controls.Add(Txt("Token (comando /rich_presence do bot)", 20, 280, 428, 20, mute, 8.75f));
-        var tbTok = Field(pg1, 20, 300, 328, rpcCfg.Token, secret: true);
-        var btnEye = Btn("Mostrar", 356, 300, 92, false);
-        btnEye.Click += (_, _) => { tbTok.UseSystemPasswordChar = !tbTok.UseSystemPasswordChar; btnEye.Text = tbTok.UseSystemPasswordChar ? "Mostrar" : "Ocultar"; };
-        pg1.Controls.Add(btnEye);
-
-        // ================= Aba 2 · Opções (as mesmas do RPC) =================
-        var pg2 = pages[1];
-        var cbSite = Opt(pg2, "Receber a música do site do Azul Groove", rpcCfg.AcceptSite, 14);
-        var cbListen = Opt(pg2, "Botão “Ouvir no navegador/app”", rpcCfg.ShowListenButton, 46);
-        var cbAlong = Opt(pg2, "Botão “Ouvir junto” (se o bot enviar o convite da call)", rpcCfg.ShowListenAlong, 78);
-        var cbPlBtn = Opt(pg2, "Botão de playlist (quando disponível)", rpcCfg.ShowPlaylistButton, 110);
-        var cbPlRef = Opt(pg2, "Incluir o ID da playlist no link do botão (YouTube)", rpcCfg.PlaylistRefs, 142);
-        var cbThumb = Opt(pg2, "Exibir a miniatura da música (quando disponível)", rpcCfg.ShowThumbnail, 174);
-        var cbQueue = Opt(pg2, "Exibir a quantidade de músicas na fila", rpcCfg.ShowQueue, 206);
-        var cbBlock = Opt(pg2, "Ignorar músicas adicionadas por outros membros", rpcCfg.BlockOtherUsers, 238);
-        var cbInvite = Opt(pg2, "Botão de convite do bot (quando disponível)", rpcCfg.BotInvite, 270);
-
-        // ================= Aba 3 · Imagens =================
-        var pg3 = pages[2];
-        TextBox Img(string label, string value, int y)
-        {
-            pg3.Controls.Add(Txt(label, 20, y, 428, 20, mute, 8.75f));
-            return Field(pg3, 20, y + 20, 428, value);
-        }
-        var tbLoop = Img("Loop/Repetição", rpcCfg.LoopImg, 14);
-        var tbLoopQ = Img("Loop/Repetição da fila", rpcCfg.LoopQueueImg, 74);
-        var tbPause = Img("Pausa", rpcCfg.PauseImg, 134);
-        var tbStream = Img("Stream/Transmissão", rpcCfg.StreamImg, 194);
-        var tbIdle = Img("Em espera", rpcCfg.IdleImg, 254);
-        pg3.Controls.Add(Txt("Links diretos de PNG/GIF. Deixe vazio para usar a imagem padrão.", 20, 314, 428, 20, mute, 8.75f));
-
-        SelectTab(0);
-
-        // ---- Barra de botões ----
-        var bar = new Panel { Dock = DockStyle.Bottom, Height = 56, BackColor = bg };
-        f.Controls.Add(bar);
-        bar.Controls.Add(new Panel { Dock = DockStyle.Top, Height = 1, BackColor = line });
-        var off = Btn("Desligar", 16, 13, 90, false);
-        var save = Btn("Salvar", 296, 13, 90, true);
-        var cancel = Btn("Cancelar", 394, 13, 90, false);
-        cancel.DialogResult = DialogResult.Cancel;
-        off.Click += (_, _) => { f.DialogResult = DialogResult.Abort; };
-
-        bool BadUrl(TextBox tb)
-        {
-            var s = tb.Text.Trim();
-            return s.Length > 0 && !(Uri.TryCreate(s, UriKind.Absolute, out var iu) &&
-                                     (iu.Scheme == Uri.UriSchemeHttp || iu.Scheme == Uri.UriSchemeHttps));
-        }
-        save.Click += (_, _) =>
-        {
-            var app = tbApp.Text.Trim().Replace(" ", "");
-            var url = tbUrl.Text.Trim();
-            if (cbOver.Checked && !RpcSettings.ValidAppId(app))
-            {
-                SelectTab(0);
-                MessageBox.Show(f, "O ID do aplicativo deve ter só números (17 a 20 dígitos).", "Rich Presence",
-                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
-            if (url.Length > 0 && !(Uri.TryCreate(url, UriKind.Absolute, out var wu) && (wu.Scheme == "ws" || wu.Scheme == "wss")))
-            {
-                SelectTab(0);
-                MessageBox.Show(f, "O link do websocket precisa começar com ws:// ou wss://", "Rich Presence",
-                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
-            if (BadUrl(tbLoop) || BadUrl(tbLoopQ) || BadUrl(tbPause) || BadUrl(tbStream) || BadUrl(tbIdle))
-            {
-                SelectTab(2);
-                MessageBox.Show(f, "Os links das imagens precisam começar com http:// ou https://\n(deixe vazio para usar a imagem padrão).",
-                    "Rich Presence", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
-            f.DialogResult = DialogResult.OK;
-        };
-        bar.Controls.AddRange(new Control[] { save, cancel, off });
-        f.AcceptButton = save;
-        f.CancelButton = cancel;
-
-        var res = f.ShowDialog();
-        tm.Stop(); tm.Dispose();
-
-        if (res == DialogResult.Abort)
-        {
-            rpcCfg.On = false; rpcCfg.Save();
-            if (miRpcOn.Checked) miRpcOn.Checked = false;
-            return;
-        }
-        if (res != DialogResult.OK) { miRpcOn.Checked = rpcCfg.On; return; }
-
-        var newApp = tbApp.Text.Trim().Replace(" ", "");
-        rpcCfg.OverrideAppId = cbOver.Checked;
-        rpcCfg.AppId = RpcSettings.ValidAppId(newApp) ? newApp : RpcSettings.DummyAppId;
-        rpcCfg.WsUrl = tbUrl.Text.Trim();
-        rpcCfg.Token = tbTok.Text.Replace(" ", "").Replace("\n", "").Replace("\r", "");
-        rpcCfg.AcceptSite = cbSite.Checked;
-        rpcCfg.ShowListenButton = cbListen.Checked;
-        rpcCfg.ShowListenAlong = cbAlong.Checked;
-        rpcCfg.ShowPlaylistButton = cbPlBtn.Checked;
-        rpcCfg.PlaylistRefs = cbPlRef.Checked;
-        rpcCfg.ShowThumbnail = cbThumb.Checked;
-        rpcCfg.ShowQueue = cbQueue.Checked;
-        rpcCfg.BlockOtherUsers = cbBlock.Checked;
-        rpcCfg.BotInvite = cbInvite.Checked;
-        rpcCfg.LoopImg = RpcSettings.Or(tbLoop.Text, RpcSettings.DefLoop);
-        rpcCfg.LoopQueueImg = RpcSettings.Or(tbLoopQ.Text, RpcSettings.DefLoop);
-        rpcCfg.PauseImg = RpcSettings.Or(tbPause.Text, RpcSettings.DefPause);
-        rpcCfg.StreamImg = RpcSettings.Or(tbStream.Text, RpcSettings.DefStream);
-        rpcCfg.IdleImg = RpcSettings.Or(tbIdle.Text, RpcSettings.DefIdle);
-        rpcCfg.On = true;
-        rpcCfg.Save();
-        if (!miRpcOn.Checked) miRpcOn.Checked = true; // dispara o RpcStart pelo próprio item (evita iniciar duas vezes)
-        else RpcStart();
-    }
 }
 
 // ============================================================================
@@ -730,7 +449,7 @@ static class RpcMapper
     }
 
     // userId = usuário do Discord aberto neste PC; botId = bot que mandou a mensagem ("" se veio do site)
-    public static bool TryBuild(JsonElement msg, RpcSettings cfg, string userId, string botId, out JsonObject? activity)
+    public static bool TryBuild(JsonElement msg, RpcSettings cfg, string userId, string botId, Func<string, string> tr, out JsonObject? activity)
     {
         activity = null;
         switch (Str(msg, "op"))
@@ -738,7 +457,7 @@ static class RpcMapper
             case "close":
                 return true; // activity null = limpa a presence
             case "idle":
-                activity = BuildIdle(msg, cfg, botId);
+                activity = BuildIdle(msg, cfg, botId, tr);
                 return true;
             case "update":
                 break;
@@ -775,18 +494,18 @@ static class RpcMapper
         string small = CdGif, smallText = "";
         if (stream)
         {
-            if (srcKey == "twitch") { small = SourceIcons["twitch"]; smallText = "Twitch: Ao vivo"; }
-            else { small = cfg.StreamImg; smallText = "Ao vivo"; }
+            if (srcKey == "twitch") { small = SourceIcons["twitch"]; smallText = "Twitch: " + tr("s3.actLive"); }
+            else { small = cfg.StreamImg; smallText = tr("s3.actLive"); }
         }
 
         if (paused)
         {
             small = cfg.PauseImg;
-            smallText = "Em pausa";
+            smallText = tr("s3.actPaused");
         }
         else if (!stream)
         {
-            if (LoopText(t, out var loopText, out var isQueue))
+            if (LoopText(t, tr, out var loopText, out var isQueue))
             {
                 small = isQueue ? cfg.LoopQueueImg : cfg.LoopImg;
                 smallText = loopText;
@@ -819,10 +538,10 @@ static class RpcMapper
         if (link != null && cfg.ShowListenButton)
         {
             var u = cfg.PlaylistRefs ? link : link.Split("&list=")[0];
-            buttons.Add(Button("Ouvir no navegador/app", u.Replace("www.", "")));
+            buttons.Add(Button(tr("s3.actListen"), u.Replace("www.", "")));
         }
 
-        var state = author.Length > 0 ? "Por: " + author : "Azul Groove";
+        var state = author.Length > 0 ? tr("s3.actBy") + ": " + author : "Azul Groove";
 
         var pName = Clean(Str(t, "playlist_name"));
         var pUrl = HttpUrl(Str(t, "playlist_url"), 512);
@@ -836,30 +555,30 @@ static class RpcMapper
             {
                 if (pName.Length > 32)
                 {
-                    state += " | Playlist: " + pName;
-                    buttons.Add(Button("Visualizar Playlist", pUrl.Replace("www.", "")));
+                    state += " | " + tr("s3.actPlaylist") + ": " + pName;
+                    buttons.Add(Button(tr("s3.actViewPlaylist"), pUrl.Replace("www.", "")));
                 }
                 else
                 {
-                    if (pName.Length < 23) { pName = "Playlist: " + pName; desc.Add(pName); }
-                    else desc.Add("Playlist: " + pName);
+                    if (pName.Length < 23) { pName = tr("s3.actPlaylist") + ": " + pName; desc.Add(pName); }
+                    else desc.Add(tr("s3.actPlaylist") + ": " + pName);
                     buttons.Add(Button(pName, pUrl.Replace("www.", "")));
                 }
             }
-            else if (pName.Length > 0) desc.Add("Playlist: " + pName);
+            else if (pName.Length > 0) desc.Add(tr("s3.actPlaylist") + ": " + pName);
         }
 
         if (aUrl != null)
         {
-            var albumTxt = "Álbum: " + aName;
+            var albumTxt = tr("s3.actAlbum") + ": " + aName;
             if (buttons.Count < 2)
-                buttons.Add(aName.Length > 32 ? Button("Visualizar Álbum", aUrl.Replace("www.", "")) : Button(albumTxt, aUrl));
+                buttons.Add(aName.Length > 32 ? Button(tr("s3.actViewAlbum"), aUrl.Replace("www.", "")) : Button(albumTxt, aUrl));
             desc.Add(albumTxt);
         }
 
         if (Bool(t, "247")) state += " | ✅24/7";
         int queue = (int)Num(t, "queue");
-        if (queue > 0 && cfg.ShowQueue) state += $" | Na fila: {queue}";
+        if (queue > 0 && cfg.ShowQueue) state += $" | {tr("s3.actQueue")}: {queue}";
 
         if (desc.Count > 0)
         {
@@ -872,13 +591,13 @@ static class RpcMapper
         if (cfg.ShowListenAlong && along != null)
         {
             if (buttons.Count > 1) buttons.RemoveAt(buttons.Count - 1);
-            buttons.Insert(0, Button("Ouvir junto (canal de voz)", along));
+            buttons.Insert(0, Button(tr("s3.actListenTogether"), along));
         }
 
         activity = new JsonObject
         {
             ["type"] = 2, // "Ouvindo"
-            ["details"] = Cut(title, 128, "Tocando agora"),
+            ["details"] = Cut(title, 128, tr("s3.actNowPlaying")),
             ["state"] = Cut(state, 128, "Azul Groove"),
             ["assets"] = assets
         };
@@ -895,7 +614,7 @@ static class RpcMapper
     }
 
     // Presence "em espera" (bot sem música): "Aguardando por novas músicas..." + convite do bot
-    static JsonObject BuildIdle(JsonElement msg, RpcSettings cfg, string botId)
+    static JsonObject BuildIdle(JsonElement msg, RpcSettings cfg, string botId, Func<string, string> tr)
     {
         var rootThumb = HttpUrl(Str(msg, "thumb"), 256);
         var assets = new JsonObject
@@ -908,8 +627,8 @@ static class RpcMapper
         var act = new JsonObject
         {
             ["type"] = 0,
-            ["details"] = "Aguardando por",
-            ["state"] = "novas músicas...",
+            ["details"] = tr("s3.actWaiting"),
+            ["state"] = tr("s3.actNewTracks"),
             ["assets"] = assets
         };
 
@@ -925,18 +644,18 @@ static class RpcMapper
 
             var buttons = new JsonArray
             {
-                Button("Me adicione no seu server.",
+                Button(tr("s3.actInviteBot"),
                        $"https://discord.com/api/oauth2/authorize?client_id={botId}&permissions={perms}&scope=bot%20applications.commands")
             };
             var support = HttpUrl(Str(msg, "support_server"), 512);
-            if (support != null) buttons.Add(Button("Servidor de Suporte", support));
+            if (support != null) buttons.Add(Button(tr("s3.actSupport"), support));
             act["buttons"] = buttons;
         }
         return act;
     }
 
     // "loop" pode ser: "queue" | true | número (repetições restantes) | [atual, total]
-    static bool LoopText(JsonElement track, out string text, out bool isQueue)
+    static bool LoopText(JsonElement track, Func<string, string> tr, out string text, out bool isQueue)
     {
         text = ""; isQueue = false;
         if (!track.TryGetProperty("loop", out var lp)) return false;
@@ -953,15 +672,15 @@ static class RpcMapper
 
         if (lp.ValueKind == JsonValueKind.String && lp.GetString() == "queue")
         {
-            text = "Repetição da fila: ativada";
+            text = tr("s3.actQueueLoop");
             isQueue = true;
         }
         else if (lp.ValueKind == JsonValueKind.Array && lp.GetArrayLength() >= 2)
-            text = $"Repetição ativada: {lp[0]}/{lp[1]}.";
+            text = string.Format(System.Globalization.CultureInfo.InvariantCulture, tr("s3.actLoopEnabled"), lp[0], lp[1]);
         else if (lp.ValueKind == JsonValueKind.Number)
-            text = $"Repetições restantes: {lp.GetRawText()}";
+            text = string.Format(System.Globalization.CultureInfo.InvariantCulture, tr("s3.actLoopCount"), lp.GetRawText());
         else
-            text = "Repetição ativada";
+            text = tr("s3.actLoop");
         return true;
     }
 
@@ -1087,7 +806,7 @@ sealed class DiscordIpc
 
             DropPipe();
             UserId = "";
-            Status?.Invoke(failMsg.Length > 0 ? failMsg : "Discord não encontrado — abra o Discord (tentando de novo…)");
+            Status?.Invoke(failMsg.Length > 0 ? failMsg : "rpc.notfound");
             try { await Task.Delay(TimeSpan.FromSeconds(10), ct); } catch { break; }
         }
     }

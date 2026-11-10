@@ -8,7 +8,7 @@ Atualizou o site na Vercel? O app já mostra a versão nova, sem gerar outro ins
 |---|---|---|
 | **Instalador** | `AzulGroove-Setup.exe` | Quem quer instalar (Menu Iniciar, atalho, desinstalar pelo Windows) |
 | **Portátil** | `AzulGroove-Portable.exe` | Quem quer só abrir, sem instalar |
-| **Microsoft Store (MSIX)** | `AzulGroove_1.0.0.0_x64.msix` | Publicação na loja |
+| **Microsoft Store (MSIX)** | `AzulGroove_1.2.7.0_x64.msix` | Publicação na loja |
 
 Para gerar as duas primeiras de uma vez: dê dois cliques em **build-all.bat**. Os arquivos saem na pasta `dist`.
 Precisa do **.NET 8 SDK** e do **Inno Setup 6.6+** só no seu PC. Quem for usar não precisa instalar nada do .NET.
@@ -24,11 +24,13 @@ Para só a versão portátil: `build.bat` (sai em `publish\AzulGroove.exe`). Par
 O instalador: instala sem pedir senha de administrador (só para o usuário), cria atalho no Menu Iniciar,
 atalho opcional na área de trabalho, aparece em *Configurações → Aplicativos* para desinstalar,
 fala português ou inglês conforme o Windows, e segue o tema claro/escuro do Windows.
+A desinstalação abre um assistente próprio do Azul Groove; o Inno Setup continua responsável por remover
+o aplicativo. As configurações, o login e os dados em `%LocalAppData%\AzulGroove` são preservados.
 
 ## MSIX (Microsoft Store ou instalação moderna)
 Precisa do **.NET 8 SDK** e do **Windows SDK** (traz o `makeappx.exe`): https://developer.microsoft.com/windows/downloads/windows-sdk/
 
-**Testar no seu PC:** dê dois cliques em `build-msix.bat`. Ele gera `msix\out\AzulGroove_1.0.0.0_x64.msix` assinado com um certificado de teste
+**Testar no seu PC:** dê dois cliques em `build-msix.bat`. Ele gera `msix\out\AzulGroove_1.2.7.0_x64.msix` assinado com um certificado de teste
 e mostra os 2 comandos (PowerShell como administrador) para confiar no certificado e instalar.
 
 **Enviar para a Store:**
@@ -36,9 +38,9 @@ e mostra os 2 comandos (PowerShell como administrador) para confiar no certifica
 2. No Partner Center, abra *Identidade do produto* e copie **Package/Identity/Name**, **Publisher** (começa com `CN=`) e **PublisherDisplayName**.
 3. No PowerShell, dentro desta pasta:
    `.\build-msix.ps1 -IdentityName "O_NAME_COPIADO" -Publisher "CN=O_PUBLISHER_COPIADO" -PublisherDisplayName "O_NOME_COPIADO"`
-4. Envie `msix\out\AzulGroove_1.0.0.0_x64.msix` no Partner Center (sem assinar — a Store assina).
+4. Envie `msix\out\AzulGroove_1.2.7.0_x64.msix` no Partner Center (sem assinar — a Store assina).
 5. Na ficha da loja use as imagens de `msix\Assets` (`StoreListing_300x300.png` e `StoreListing_1080x1080.png`), mais capturas de tela e a política de privacidade.
-A cada versão nova, aumente `-Version` (ex.: `1.0.1.0`).
+A cada versão nova, aumente `-Version` (ex.: `1.2.8.0`).
 
 No MSIX da Store o app **não** baixa o WebView2 sozinho (a Store não gosta disso). O Windows 11 e quase todos os Windows 10 já têm.
 Os ícones em `msix\Assets` são provisórios — troque pelos seus se quiser.
@@ -88,3 +90,10 @@ Antes da página carregar, e nas páginas só escuras (início e assistente), se
 - Endereço do site: `HomeUrl` em `MainForm.cs`.
 - Ícone: troque o `app.ico` (use um .ico com vários tamanhos, até 256x256).
 - Dados do app (login, configurações): `%LocalAppData%\AzulGroove` — apagar essa pasta desloga.
+
+## Beta e versão normal lado a lado
+A Beta tem identidade própria, então os dois apps podem ficar instalados ao mesmo tempo:
+- Instalador: `AzulGrooveBeta-Setup.exe` (pasta `Azul Groove Beta`, atalhos **Azul Groove Beta** no Menu Iniciar e na Área de Trabalho).
+- Dados da Beta: `%LocalAppData%\AzulGrooveBeta` (a versão normal continua em `%LocalAppData%\AzulGroove`).
+- A versão do app fica em `AppVersion` (`MainForm.Beta.cs`); mantenha igual no `AzulGroove.csproj` e no `AzulGroove.iss`, e use a mesma string na tag do GitHub (`v1.2.7`).
+- O Azul Groove Music usa o `MainForm.Music.cs` (repositório `andrsodremiranda/Azul-Groove-Music`).

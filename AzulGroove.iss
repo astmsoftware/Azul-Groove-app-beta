@@ -1,17 +1,18 @@
-; Instalador do Azul Groove (Inno Setup 6.6 ou mais novo)
-; Gera: installer\AzulGroove-Setup.exe
+; Instalador do Azul Groove BETA (Inno Setup 6.6 ou mais novo)
+; Gera: installer\AzulGrooveBeta-Setup.exe
+; A Beta tem AppId, pasta e atalhos próprios: pode ficar instalada ao lado da versão normal.
 
 ; Modo "um clique" (estilo Chrome): sem etapas, instala sozinho e abre o app.
 ; Para voltar ao assistente normal, apague a linha abaixo.
 #define OneClick
 
-#define AppName "Azul Groove"
-#define AppVersion "1.1.0B"
+#define AppName "Azul Groove Beta"
+#define AppVersion "1.2.7"
 #define AppPublisher "ASTM Software"
 #define AppExe "AzulGroove.exe"
 
 [Setup]
-AppId={{7B2E6D3A-5C1F-4E8B-9A41-0A2B6C0DE001}
+AppId={{8CAB4764-DD94-4752-9DB7-38FA6199BE02}
 AppName={#AppName}
 AppVersion={#AppVersion}
 AppPublisher={#AppPublisher}
@@ -21,7 +22,7 @@ DefaultGroupName={#AppName}
 UninstallDisplayIcon={app}\{#AppExe}
 SetupIconFile=app.ico
 OutputDir=installer
-OutputBaseFilename=AzulGroove-Setup
+OutputBaseFilename=AzulGrooveBeta-Setup
 Compression=lzma2/max
 SolidCompression=yes
 ArchitecturesAllowed=x64compatible
@@ -58,6 +59,7 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 
 [Files]
 Source: "publish\{#AppExe}"; DestDir: "{app}"; Flags: ignoreversion
+Source: "publish\AzulGrooveUninstall.exe"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExe}"
@@ -69,10 +71,33 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopico
 
 [Run]
 #ifdef OneClick
-Filename: "{app}\{#AppExe}"; Flags: nowait skipifsilent runasoriginaluser
+Filename: "{app}\{#AppExe}"; Flags: nowait runasoriginaluser
 #else
 Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
 #endif
 
 ; Animação (barras de equalizador na tela de boas-vindas e de conclusão)
 #include "installer-animation.iss"
+
+[Code]
+procedure CurStepChanged(CurStep: TSetupStep);
+var
+  RootKey: Integer;
+  UninstallKey: String;
+begin
+  if CurStep = ssPostInstall then
+  begin
+    if IsAdminInstallMode then
+      RootKey := HKEY_LOCAL_MACHINE
+    else
+      RootKey := HKEY_CURRENT_USER;
+
+    UninstallKey := 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{8CAB4764-DD94-4752-9DB7-38FA6199BE02}_is1';
+    if not RegWriteStringValue(RootKey, UninstallKey, 'UninstallString',
+      '"' + ExpandConstant('{app}\AzulGrooveUninstall.exe') + '" --uninstall') then
+      RaiseException('Não foi possível configurar o assistente de desinstalação do Azul Groove Beta.');
+    if not RegWriteStringValue(RootKey, UninstallKey, 'QuietUninstallString',
+      '"' + ExpandConstant('{app}\AzulGrooveUninstall.exe') + '" --uninstall --quiet') then
+      RaiseException('Não foi possível configurar a desinstalação silenciosa do Azul Groove Beta.');
+  end;
+end;

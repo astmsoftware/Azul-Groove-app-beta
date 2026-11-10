@@ -10,17 +10,17 @@
   Precisa de: .NET 8 SDK + Windows SDK (traz o makeappx.exe e o signtool.exe)
 #>
 param(
-  [string]$IdentityName = "ASTMSoftware.AzulGroove",
+  [string]$IdentityName = "ASTMSoftware.AzulGrooveBeta",
   [string]$Publisher = "CN=ASTM Software",
   [string]$PublisherDisplayName = "ASTM Software",
-  [string]$Version = "1.0.0.0",
+  [string]$Version = "1.2.7.0",
   [switch]$Sign
 )
 
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
 
-if ($Version -notmatch '^\d+\.\d+\.\d+\.\d+$') { throw "Version precisa ter 4 numeros, ex.: 1.0.0.0" }
+if ($Version -notmatch '^\d+\.\d+\.\d+\.\d+$') { throw "Version precisa ter 4 numeros, ex.: 1.2.7.0" }
 
 $out    = Join-Path $PSScriptRoot "msix\out"
 $layout = Join-Path $out "layout"

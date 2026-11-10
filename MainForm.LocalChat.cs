@@ -337,7 +337,10 @@ return JSON.stringify(o);
         skipSplash = true;   // a animação de abertura não deve sobrescrever a tela
         cw.NavigateToString(LocalChatHtml
             .Replace("@TITLE@", LocalChatTitle)
-            .Replace("@LOGO@", LChatLogo()));
+            .Replace("@LOGO@", LChatLogo())
+            .Replace("@LANG@", LangCode)
+            .Replace("@DIR@", I18nList().FirstOrDefault(x => x.Code.Equals(LangCode, StringComparison.OrdinalIgnoreCase)).Rtl ? "rtl" : "ltr")
+            .Replace("@T@", TextsJson("p.", "b.", "fbb.", "off.", "rpc.", "s3.")));
     }
 
     // Logo da Azul Groove (flor de lótus) embutida: aparece mesmo sem internet
@@ -612,6 +615,7 @@ return JSON.stringify(o);
     {
         await LChatPushStateAsync();     // a tela aparece já, a detecção vem depois
         if (lx.WallImg.Length > 0) await LChatPushAsync("wall", lx.WallImg);
+        _ = FbInjectAsync("local"); // aba "Feedback" das configurações
         await LAiOnInitAsync();
         await LChatRefreshAsync(true);
     }
@@ -925,12 +929,12 @@ return JSON.stringify(o);
 
     // ================= Design da página (mesmo visual do chat do site, sem depender de internet) =================
     const string LocalChatHtml = """
-<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>@TITLE@</title><style>
+<!doctype html><html lang="@LANG@" dir="@DIR@"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>@TITLE@</title><style>
 @property --c1{syntax:'<color>';inherits:true;initial-value:#2438aa}
 @property --c2{syntax:'<color>';inherits:true;initial-value:#5865f2}
 @property --c3{syntax:'<color>';inherits:true;initial-value:#1fb6ff}
 @keyframes cshift{0%{--c1:#2438aa;--c2:#5865f2;--c3:#1fb6ff}30%{--c1:#4c1d95;--c2:#a855f7;--c3:#ec4899}62%{--c1:#0e7490;--c2:#6366f1;--c3:#22d3ee}100%{--c1:#2b2fb0;--c2:#7c3aed;--c3:#38bdf8}}
-:root{color-scheme:dark;--tx:#fff;--inp:#1e1f22;--soft:rgba(255,255,255,.06);--hi:#e8eaed;--bg:#0f1117;--side:#12141a;--card:#1c1f26;--line:rgba(255,255,255,.08);--p:#5865F2;--t:#dbdee1;--m:#949ba4;--c1:#2438aa;--c2:#5865f2;--c3:#1fb6ff}
+:root{color-scheme:dark;--tx:#fff;--inp:#1e1f22;--soft:rgba(255,255,255,.06);--hi:#e8eaed;--bg:#0f1117;--side:#12141a;--card:#1c1f26;--line:rgba(255,255,255,.08);--p:#5865F2;--t:#dbdee1;--m:#949ba4;--c1:#2438aa;--c2:#5865f2;--c3:#1fb6ff;--scroll-thumb:color-mix(in srgb,var(--m) 55%,transparent);--scroll-thumb-hover:var(--p)}
 html[data-colors=on]{animation:cshift 28s ease-in-out infinite alternate}
 html[data-anim=off]{animation:none!important}
 :root[data-theme=light]{--bg:#f4f6fb;--side:#fff;--card:#fff;--line:rgba(0,0,0,.1);--t:#2a2e36;--m:#646b78;--tx:#14161a;--inp:#fff;--soft:rgba(0,0,0,.05);--hi:#14161a;color-scheme:light}
@@ -1107,7 +1111,14 @@ html[data-fx=eq] .orb{display:none}
 @keyframes msgIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
 @keyframes appIn{from{opacity:0;transform:scale(.985)}to{opacity:1;transform:none}}
 @keyframes sideIn{from{opacity:0;transform:translateX(-24px)}to{opacity:1;transform:none}}
-*{scrollbar-width:thin;scrollbar-color:color-mix(in srgb,var(--m) 40%,transparent) transparent}
+*{scrollbar-width:thin;scrollbar-color:transparent transparent}
+*:hover,*:focus-within{scrollbar-color:var(--scroll-thumb) transparent}
+*::-webkit-scrollbar{width:7px;height:7px}
+*::-webkit-scrollbar-track,*::-webkit-scrollbar-corner{background:transparent}
+*::-webkit-scrollbar-thumb{background:transparent;border:2px solid transparent;background-clip:padding-box;border-radius:999px}
+*:hover::-webkit-scrollbar-thumb,*:focus-within::-webkit-scrollbar-thumb{background:var(--scroll-thumb);border:2px solid transparent;background-clip:padding-box}
+*::-webkit-scrollbar-thumb:hover{background:var(--scroll-thumb-hover);border:2px solid transparent;background-clip:padding-box}
+*::-webkit-scrollbar-button{display:none;width:0;height:0}
 @media(min-width:761px){.side{transition:margin-left .38s cubic-bezier(.2,.7,.2,1),opacity .3s}body.side-off .side{margin-left:-280px;opacity:0;pointer-events:none}}
 @media(max-width:760px){.side{position:fixed;inset:0 auto 0 0;z-index:5;transform:translateX(-100%);transition:.25s}.side.open{transform:none}.box textarea{font-size:16px}.mdl span{display:none}}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;animation-delay:0s!important;animation-iteration-count:1!important}}
@@ -1220,10 +1231,10 @@ html[data-fx=eq] .orb{display:none}
 </main>
 <div class="pop" id="mdlPop"></div>
 <div class="modal" id="cfg"><div class="card">
- <div class="ch"><div class="chh"><span class="chi" id="cfgIco"></span><div><h3>Configurações</h3><small>Ajuste a IA, o visual e os seus dados</small></div></div><button class="ib" id="cfgX" title="Fechar"></button></div>
+ <div class="ch"><div class="chh"><span class="chi" id="cfgIco"></span><div><h3 id="cfgTitle">Configurações</h3><small id="cfgSub">Ajuste a IA, o visual e os seus dados</small></div></div><button class="ib" id="cfgX" title="Fechar"></button></div>
  <div class="tabs" id="tabs"></div>
 <div class="pane" id="p_md">
-  <small>Rode a IA do Azul Groove direto no app, sem instalar mais nada. Depois de baixar um modelo, ela funciona sem internet.</small>
+  <small id="mdIntro"></small>
   <div class="eng" id="engBox"></div>
   <div class="sec" id="secMd"></div>
   <div class="mds" id="mdList"></div>
@@ -1232,58 +1243,58 @@ html[data-fx=eq] .orb{display:none}
   <div class="row" style="justify-content:flex-start;flex-wrap:nowrap"><input type="text" id="mdUrl" placeholder="Link de um modelo .gguf (https://huggingface.co/...)" autocomplete="off" style="flex:1;background:var(--inp);border:1px solid var(--line);border-radius:12px;padding:11px 14px;color:var(--tx);font:inherit"><button class="btn2 ok" id="mdUrlBtn"></button></div>
   <div class="row" style="justify-content:flex-start"><button class="btn2" id="mdImpBtn"></button></div>
   <div class="sec" id="secPerf"></div>
-  <label class="chk2"><input type="checkbox" id="mdVk"> Usar a placa de vídeo (Vulkan)</label>
-  <small>Deixa as respostas bem mais rápidas em PCs com placa de vídeo. Se travar ou der erro, desligue: o processador funciona em qualquer PC.</small>
+  <label class="chk2"><input type="checkbox" id="mdVk"> <span id="gpuLabel"></span></label>
+  <small id="gpuHint"></small>
  </div>
  <div class="pane" id="p_ia" hidden>
-  <small>Funciona com qualquer app de IA compatível com o protocolo OpenAI: Ollama, LM Studio, Jan, llama.cpp, KoboldCpp, GPT4All… Tudo fica só neste PC.</small>
+  <small id="otherAiIntro"></small>
   <small id="siteNote"></small>
   <div class="sec" id="secDet"></div>
   <div class="mlist" id="det"></div>
   <div class="sec" id="secCon"></div>
-  <label>Provedor<select id="cfgProv"></select></label>
-  <label>URL base da API<input type="text" id="cfgBase" placeholder="http://127.0.0.1:11434/v1" autocomplete="off"></label>
-  <label>Chave da API (vazio para apps locais)<input type="password" id="cfgKey" autocomplete="off"></label>
-  <label class="chk2" id="clrRow" style="display:none"><input type="checkbox" id="cfgClr"> Remover a chave salva</label>
-  <label>Modelo<input type="text" id="cfgModel" placeholder="ex.: llama3.2" autocomplete="off"></label>
-  <div class="row" style="justify-content:flex-start"><button class="btn2" id="cfgFetch">Buscar modelos</button></div>
+  <label><span id="providerLabel"></span><select id="cfgProv"></select></label>
+  <label><span id="apiBaseLabel"></span><input type="text" id="cfgBase" placeholder="http://127.0.0.1:11434/v1" autocomplete="off"></label>
+  <label><span id="apiKeyLabel"></span><input type="password" id="cfgKey" autocomplete="off"></label>
+  <label class="chk2" id="clrRow" style="display:none"><input type="checkbox" id="cfgClr"> <span id="removeKeyLabel"></span></label>
+  <label><span id="modelLabel"></span><input type="text" id="cfgModel" placeholder="ex.: llama3.2" autocomplete="off"></label>
+  <div class="row" style="justify-content:flex-start"><button class="btn2" id="cfgFetch"></button></div>
   <div class="mlist" id="cfgModels"></div>
   <div class="sec" id="secSite"></div>
-  <label class="chk2"><input type="checkbox" id="cfgSite"> Usar a IA do site quando houver internet</label>
+  <label class="chk2"><input type="checkbox" id="cfgSite"> <span id="useWebsiteAiLabel"></span></label>
   <small id="siteAiNote"></small>
   <small id="cfgMsg"></small>
  </div>
  <div class="pane" id="p_ap" hidden>
-  <label>Tema</label>
+  <label id="themeLabel"></label>
   <div class="seg" id="thSeg"></div>
-  <small>"Automático" segue o tema do Windows.</small>
-  <label>Fundo do chat</label>
+  <small id="themeHint"></small>
+  <label id="backgroundLabel"></label>
   <div class="walls" id="walls"></div>
   <div class="row" style="justify-content:flex-start"><button class="btn2" id="wallBtn"></button><input type="file" id="wallFile" accept="image/*" hidden></div>
-  <label>Escurecer o fundo<input type="range" id="lookDim" min="0" max="80"></label>
-  <label>Efeitos da tela inicial</label>
+  <label><span id="dimLabel"></span><input type="range" id="lookDim" min="0" max="80"></label>
+  <label id="homeEffectsLabel"></label>
   <div class="seg" id="fxSeg"></div>
-  <label class="chk2"><input type="checkbox" id="lookColors"> Cores do fundo animadas (muda de azul para roxo e rosa aos poucos)</label>
-  <label class="chk2"><input type="checkbox" id="lookAnim"> Animações da interface</label>
+  <label class="chk2"><input type="checkbox" id="lookColors"> <span id="animatedColorsLabel"></span></label>
+  <label class="chk2"><input type="checkbox" id="lookAnim"> <span id="animationsLabel"></span></label>
   <div class="row" style="justify-content:flex-start"><button class="btn2 dng" id="resetBtn"></button></div>
-  <small>Volta tema, fundo, escurecimento, efeitos e animações ao original.</small>
+  <small id="resetLookHint"></small>
  </div>
  <div class="pane" id="p_es" hidden>
-  <small>Tudo aqui vale na hora e fica só neste PC.</small>
-  <label>Tom das respostas</label>
+  <small id="settingsLocal"></small>
+  <label id="toneLabel"></label>
   <div class="seg" id="toneSeg"></div>
-  <label>Dados do Azul Groove</label>
+  <label id="azulDataLabel"></label>
   <div class="seg" id="kbSeg"></div>
-  <small>Desligado: a IA vira um assistente geral, sem falar do bot Azul Groove, a menos que você peça.</small>
-  <label class="chk2"><input type="checkbox" id="prefDeep"> Modo aprofundado (respostas mais completas e organizadas)</label>
-  <small>Respostas mais longas e detalhadas. Fica mais lento. Em cada resposta também há o botão "Aprofundar".</small>
-  <label>Curiosidades da tela inicial</label>
+  <small id="dataOffHint"></small>
+  <label class="chk2"><input type="checkbox" id="prefDeep"> <span id="deepModeLabel"></span></label>
+  <small id="deepHint"></small>
+  <label id="curiositiesLabel"></label>
   <div class="topics" id="topicBox"></div>
-  <label>Seu jeito de falar (instruções para a IA)<textarea id="prefStyle" maxlength="400" placeholder="Ex.: respostas curtas, sem gírias, sempre com um exemplo"></textarea></label>
-  <label>Memória: o que a IA deve lembrar</label>
-  <div class="row" style="justify-content:flex-start;flex-wrap:nowrap"><input type="text" id="memIn" maxlength="200" placeholder="Ex.: me chame de Léo; gosto de samba" autocomplete="off" style="flex:1;background:var(--inp);border:1px solid var(--line);border-radius:10px;padding:10px 12px;color:var(--tx);font:inherit"><button class="btn2 ok" id="memAddBtn">Adicionar</button></div>
+  <label><span id="instructionsLabel"></span><textarea id="prefStyle" maxlength="400"></textarea></label>
+  <label id="memoryLabel"></label>
+  <div class="row" style="justify-content:flex-start;flex-wrap:nowrap"><input type="text" id="memIn" maxlength="200" autocomplete="off" style="flex:1;background:var(--inp);border:1px solid var(--line);border-radius:10px;padding:10px 12px;color:var(--tx);font:inherit"><button class="btn2 ok" id="memAddBtn"></button></div>
   <div class="mlist" id="memList"></div>
-  <label class="chk2"><input type="checkbox" id="prefLearn"> Aprender com 👍 nas respostas</label>
+  <label class="chk2"><input type="checkbox" id="prefLearn"> <span id="learnLabel"></span></label>
   <div class="row" style="justify-content:flex-start"><button class="btn2 dng" id="likeBtn"></button></div>
  </div>
  <div class="pane" id="p_da" hidden>
@@ -1291,9 +1302,10 @@ html[data-fx=eq] .orb{display:none}
   <button class="btn2 dng" id="delAllBtn"></button>
   <button class="btn2 dng" id="clrCfgBtn"></button>
  </div>
+ <div class="pane" id="p_fb" hidden><div id="fbHost"></div></div>
  <div class="pane" id="p_co" hidden>
   <div class="acct"><img id="coAv" alt="" style="display:none"><div><b id="coNm"></b><br><small id="coPr"></small></div></div>
-  <small>Seu nome, sua foto, o tema e as preferências são copiados do chat do site quando você abre o site com internet. Para entrar com outra conta ou sair, use o chat do site.</small>
+  <small id="websiteAiHint"></small>
  </div>
  <div class="row"><button class="btn2" id="cfgCancel">Fechar</button><button class="btn2 ok" id="cfgSave">Salvar IA</button></div>
 </div></div>
@@ -1303,9 +1315,9 @@ html[data-fx=eq] .orb{display:none}
  <div class="row"><button class="btn2 ok" id="newsOk">Entendi</button></div>
 </div></div>
 <div class="modal" id="supM"><div class="card sm">
- <h3>💙 Apoiar o projeto</h3>
+ <h3 id="supTitle"></h3>
  <div class="qrbox" id="qr"><svg viewBox="0 0 25 25" xmlns="http://www.w3.org/2000/svg" shape-rendering="crispEdges"><path fill="#000" d="M0 0h7v1h-7zM8 0h4v1h-4zM16 0h1v1h-1zM18 0h7v1h-7zM0 1h1v1h-1zM6 1h1v1h-1zM9 1h1v1h-1zM11 1h3v1h-3zM16 1h1v1h-1zM18 1h1v1h-1zM24 1h1v1h-1zM0 2h1v1h-1zM2 2h3v1h-3zM6 2h1v1h-1zM8 2h1v1h-1zM10 2h1v1h-1zM13 2h3v1h-3zM18 2h1v1h-1zM20 2h3v1h-3zM24 2h1v1h-1zM0 3h1v1h-1zM2 3h3v1h-3zM6 3h1v1h-1zM8 3h1v1h-1zM10 3h1v1h-1zM12 3h2v1h-2zM15 3h1v1h-1zM18 3h1v1h-1zM20 3h3v1h-3zM24 3h1v1h-1zM0 4h1v1h-1zM2 4h3v1h-3zM6 4h1v1h-1zM8 4h1v1h-1zM12 4h5v1h-5zM18 4h1v1h-1zM20 4h3v1h-3zM24 4h1v1h-1zM0 5h1v1h-1zM6 5h1v1h-1zM12 5h1v1h-1zM14 5h1v1h-1zM16 5h1v1h-1zM18 5h1v1h-1zM24 5h1v1h-1zM0 6h7v1h-7zM8 6h1v1h-1zM10 6h1v1h-1zM12 6h1v1h-1zM14 6h1v1h-1zM16 6h1v1h-1zM18 6h7v1h-7zM10 7h1v1h-1zM12 7h1v1h-1zM15 7h2v1h-2zM0 8h4v1h-4zM6 8h1v1h-1zM8 8h1v1h-1zM10 8h1v1h-1zM12 8h1v1h-1zM14 8h4v1h-4zM20 8h3v1h-3zM24 8h1v1h-1zM0 9h5v1h-5zM7 9h2v1h-2zM11 9h1v1h-1zM19 9h1v1h-1zM23 9h1v1h-1zM1 10h1v1h-1zM5 10h7v1h-7zM14 10h1v1h-1zM17 10h2v1h-2zM20 10h1v1h-1zM2 11h2v1h-2zM7 11h1v1h-1zM9 11h2v1h-2zM12 11h3v1h-3zM16 11h2v1h-2zM20 11h3v1h-3zM0 12h1v1h-1zM2 12h1v1h-1zM4 12h3v1h-3zM9 12h2v1h-2zM13 12h2v1h-2zM16 12h3v1h-3zM20 12h1v1h-1zM22 12h3v1h-3zM3 13h3v1h-3zM8 13h2v1h-2zM12 13h1v1h-1zM15 13h2v1h-2zM18 13h3v1h-3zM24 13h1v1h-1zM1 14h1v1h-1zM3 14h1v1h-1zM6 14h1v1h-1zM10 14h1v1h-1zM17 14h1v1h-1zM20 14h1v1h-1zM22 14h2v1h-2zM0 15h1v1h-1zM3 15h3v1h-3zM9 15h1v1h-1zM11 15h1v1h-1zM14 15h2v1h-2zM19 15h2v1h-2zM24 15h1v1h-1zM0 16h5v1h-5zM6 16h1v1h-1zM9 16h1v1h-1zM11 16h1v1h-1zM13 16h1v1h-1zM15 16h10v1h-10zM8 17h2v1h-2zM11 17h4v1h-4zM16 17h1v1h-1zM20 17h1v1h-1zM22 17h1v1h-1zM24 17h1v1h-1zM0 18h7v1h-7zM9 18h2v1h-2zM14 18h1v1h-1zM16 18h1v1h-1zM18 18h1v1h-1zM20 18h1v1h-1zM22 18h3v1h-3zM0 19h1v1h-1zM6 19h1v1h-1zM9 19h1v1h-1zM12 19h1v1h-1zM14 19h3v1h-3zM20 19h1v1h-1zM24 19h1v1h-1zM0 20h1v1h-1zM2 20h3v1h-3zM6 20h1v1h-1zM9 20h3v1h-3zM14 20h1v1h-1zM16 20h6v1h-6zM23 20h2v1h-2zM0 21h1v1h-1zM2 21h3v1h-3zM6 21h1v1h-1zM8 21h1v1h-1zM11 21h1v1h-1zM13 21h1v1h-1zM15 21h1v1h-1zM17 21h2v1h-2zM20 21h5v1h-5zM0 22h1v1h-1zM2 22h3v1h-3zM6 22h1v1h-1zM8 22h2v1h-2zM11 22h2v1h-2zM17 22h2v1h-2zM20 22h1v1h-1zM22 22h2v1h-2zM0 23h1v1h-1zM6 23h1v1h-1zM8 23h2v1h-2zM11 23h1v1h-1zM13 23h3v1h-3zM17 23h1v1h-1zM20 23h1v1h-1zM22 23h1v1h-1zM0 24h7v1h-7zM8 24h3v1h-3zM13 24h2v1h-2zM17 24h8v1h-8z"/></svg></div>
- <p>Aponte a câmera do celular para o QR Code e faça o apoio pelo LivePix. Ele aparece mesmo com o app sem internet: o apoio é feito pelo seu celular.</p>
+ <p id="supDescription"></p>
  <div class="lnk" id="supUrl">https://livepix.gg/astmsoftware</div>
  <div class="row"><button class="btn2" id="supCopy"></button><button class="btn2 ok" id="supOpen"></button><button class="btn2" id="supClose">Fechar</button></div>
 </div></div>
@@ -1318,6 +1330,9 @@ html[data-fx=eq] .orb{display:none}
 <div class="toast" id="toast"></div>
 <script>
 var $=function(i){return document.getElementById(i)};
+var T=@T@;function t(k){return T[k]||k}
+var LANG='@LANG@';
+function ct(k){return t('s3.chat.'+k)}
 function send(m){try{window.chrome.webview.postMessage(m)}catch(e){}}
 var IC={
  plus:'<path d="M12 5v14M5 12h14"/>',
@@ -1359,11 +1374,34 @@ var IC={
 function ic(n,s){s=s||17;return '<svg viewBox="0 0 24 24" width="'+s+'" height="'+s+'" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'+IC[n]+'</svg>'}
 function lbl(n,t){return ic(n)+'<span>'+t+'</span>'}
 
-var TONES={normal:'Equilibrado',serio:'Sério',casual:'Descontraído',humor:'Humor',didatico:'Didático'};
-var TOPICS={musica:'🎵 Música',aviacao:'✈️ Aviação',ambiente:'🌱 Meio ambiente',brasil:'🇧🇷 Brasil',geral:'🌍 Gerais'};
-var WALLS={none:{n:'Padrão'},aurora:{n:'Aurora',css:'linear-gradient(135deg,#0f2027,#203a43,#2c5364)'},neon:{n:'Neon',css:'linear-gradient(135deg,#12002f,#3a0ca3,#4361ee)'},
- lotus:{n:'Lótus',css:'linear-gradient(135deg,#1e1b4b,#7c3aed,#ec4899)'},sunset:{n:'Pôr do sol',css:'linear-gradient(135deg,#41295a,#c0392b,#f39c12)'},forest:{n:'Floresta',css:'linear-gradient(135deg,#0b3d2e,#1b6b4a,#8fd694)'},
- grafite:{n:'Grafite',css:'#1b1d23'},ceu:{n:'Céu',css:'linear-gradient(135deg,#a1c4fd,#c2e9fb)'},rosa:{n:'Rosa',css:'linear-gradient(135deg,#fbc2eb,#a6c1ee)'}};
+var LABELS={
+ 'pt-BR':{tone:['Equilibrado','Sério','Descontraído','Humor','Didático'],topic:['Música','Aviação','Meio ambiente','Brasil','Gerais'],wall:['Padrão','Aurora','Neon','Lótus','Pôr do sol','Floresta','Grafite','Céu','Rosa'],ready:'IA pronta, rodando neste PC (funciona sem internet).'},
+ 'pt-PT':{tone:['Equilibrado','Sério','Descontraído','Humor','Didático'],topic:['Música','Aviação','Ambiente','Brasil','Gerais'],wall:['Predefinido','Aurora','Néon','Lótus','Pôr do sol','Floresta','Grafite','Céu','Rosa'],ready:'IA pronta, a funcionar neste PC (sem internet).'},
+ en:{tone:['Balanced','Serious','Casual','Humor','Teaching'],topic:['Music','Aviation','Environment','Brazil','General'],wall:['Default','Aurora','Neon','Lotus','Sunset','Forest','Graphite','Sky','Pink'],ready:'AI is ready and running on this PC (works offline).'},
+ es:{tone:['Equilibrado','Serio','Informal','Humor','Didáctico'],topic:['Música','Aviación','Medio ambiente','Brasil','General'],wall:['Predeterminado','Aurora','Neón','Loto','Atardecer','Bosque','Grafito','Cielo','Rosa'],ready:'La IA está lista y funciona en este PC (sin internet).'},
+ fr:{tone:['Équilibré','Sérieux','Décontracté','Humour','Pédagogique'],topic:['Musique','Aviation','Environnement','Brésil','Général'],wall:['Par défaut','Aurore','Néon','Lotus','Coucher de soleil','Forêt','Graphite','Ciel','Rose'],ready:'L’IA est prête et fonctionne sur ce PC (hors ligne).'},
+ de:{tone:['Ausgewogen','Ernst','Locker','Humor','Lehrreich'],topic:['Musik','Luftfahrt','Umwelt','Brasilien','Allgemein'],wall:['Standard','Aurora','Neon','Lotus','Sonnenuntergang','Wald','Graphit','Himmel','Rosa'],ready:'Die KI ist bereit und läuft auf diesem PC (offline).'},
+ it:{tone:['Equilibrato','Serio','Informale','Umorismo','Didattico'],topic:['Musica','Aviazione','Ambiente','Brasile','Generale'],wall:['Predefinito','Aurora','Neon','Loto','Tramonto','Foresta','Grafite','Cielo','Rosa'],ready:'L’IA è pronta e funziona su questo PC (offline).'},
+ nl:{tone:['Gebalanceerd','Serieus','Ontspannen','Humor','Leerzaam'],topic:['Muziek','Luchtvaart','Milieu','Brazilië','Algemeen'],wall:['Standaard','Aurora','Neon','Lotus','Zonsondergang','Bos','Grafiet','Hemel','Roze'],ready:'De AI is klaar en draait op deze pc (offline).'},
+ pl:{tone:['Zrównoważony','Poważny','Swobodny','Humor','Dydaktyczny'],topic:['Muzyka','Lotnictwo','Środowisko','Brazylia','Ogólne'],wall:['Domyślny','Aurora','Neon','Lotos','Zachód słońca','Las','Grafit','Niebo','Różowy'],ready:'AI jest gotowa i działa na tym komputerze (offline).'},
+ tr:{tone:['Dengeli','Ciddi','Rahat','Mizahi','Öğretici'],topic:['Müzik','Havacılık','Çevre','Brezilya','Genel'],wall:['Varsayılan','Aurora','Neon','Lotus','Gün batımı','Orman','Grafit','Gökyüzü','Pembe'],ready:'Yapay zekâ hazır ve bu bilgisayarda çalışıyor (çevrimdışı).'},
+ ru:{tone:['Сбалансированный','Серьёзный','Непринуждённый','С юмором','Обучающий'],topic:['Музыка','Авиация','Окружающая среда','Бразилия','Общее'],wall:['По умолчанию','Аврора','Неон','Лотос','Закат','Лес','Графит','Небо','Розовый'],ready:'ИИ готова и работает на этом компьютере (без интернета).'},
+ uk:{tone:['Збалансований','Серйозний','Невимушений','Гумор','Навчальний'],topic:['Музика','Авіація','Довкілля','Бразилія','Загальне'],wall:['Типовий','Аврора','Неон','Лотос','Захід сонця','Ліс','Графіт','Небо','Рожевий'],ready:'ШІ готовий і працює на цьому ПК (без інтернету).'},
+ ar:{tone:['متوازن','جاد','عفوي','مرح','تعليمي'],topic:['الموسيقى','الطيران','البيئة','البرازيل','عام'],wall:['افتراضي','الشفق','نيون','لوتس','غروب الشمس','الغابة','غرافيت','السماء','وردي'],ready:'الذكاء الاصطناعي جاهز ويعمل على هذا الكمبيوتر (دون إنترنت).'},
+ ja:{tone:['バランス','真面目','カジュアル','ユーモア','解説'],topic:['音楽','航空','環境','ブラジル','一般'],wall:['デフォルト','オーロラ','ネオン','ロータス','夕焼け','森','グラファイト','空','ピンク'],ready:'AIの準備が完了し、このPC上で動作しています（オフライン）。'},
+ ko:{tone:['균형','진지함','편안함','유머','교육적'],topic:['음악','항공','환경','브라질','일반'],wall:['기본값','오로라','네온','연꽃','노을','숲','흑연','하늘','분홍'],ready:'AI가 준비되어 이 PC에서 실행 중입니다(오프라인).'},
+ 'zh-CN':{tone:['均衡','严肃','轻松','幽默','讲解'],topic:['音乐','航空','环境','巴西','常规'],wall:['默认','极光','霓虹','莲花','日落','森林','石墨','天空','粉色'],ready:'AI 已就绪，正在此电脑上运行（离线可用）。'},
+ 'zh-TW':{tone:['平衡','嚴肅','輕鬆','幽默','教學'],topic:['音樂','航空','環境','巴西','一般'],wall:['預設','極光','霓虹','蓮花','日落','森林','石墨','天空','粉紅'],ready:'AI 已就緒，正在此電腦上執行（可離線使用）。'},
+ hi:{tone:['संतुलित','गंभीर','अनौपचारिक','हास्य','शिक्षाप्रद'],topic:['संगीत','विमानन','पर्यावरण','ब्राज़ील','सामान्य'],wall:['डिफ़ॉल्ट','ऑरोरा','निऑन','कमल','सूर्यास्त','वन','ग्रेफाइट','आकाश','गुलाबी'],ready:'AI तैयार है और इस PC पर चल रहा है (ऑफ़लाइन)।'},
+ id:{tone:['Seimbang','Serius','Santai','Humor','Mendidik'],topic:['Musik','Penerbangan','Lingkungan','Brasil','Umum'],wall:['Default','Aurora','Neon','Teratai','Senja','Hutan','Grafit','Langit','Merah muda'],ready:'AI siap dan berjalan di PC ini (dapat digunakan offline).'},
+ vi:{tone:['Cân bằng','Nghiêm túc','Thoải mái','Hài hước','Giáo dục'],topic:['Âm nhạc','Hàng không','Môi trường','Brazil','Chung'],wall:['Mặc định','Cực quang','Neon','Sen','Hoàng hôn','Rừng','Than chì','Bầu trời','Hồng'],ready:'AI đã sẵn sàng và đang chạy trên PC này (có thể dùng ngoại tuyến).'}
+};
+var L=LABELS[LANG]||LABELS.en;
+var TONES={normal:L.tone[0],serio:L.tone[1],casual:L.tone[2],humor:L.tone[3],didatico:L.tone[4]};
+var TOPICS={musica:'🎵 '+L.topic[0],aviacao:'✈️ '+L.topic[1],ambiente:'🌱 '+L.topic[2],brasil:'🇧🇷 '+L.topic[3],geral:'🌍 '+L.topic[4]};
+var WALLS={none:{n:L.wall[0]},aurora:{n:L.wall[1],css:'linear-gradient(135deg,#0f2027,#203a43,#2c5364)'},neon:{n:L.wall[2],css:'linear-gradient(135deg,#12002f,#3a0ca3,#4361ee)'},
+ lotus:{n:L.wall[3],css:'linear-gradient(135deg,#1e1b4b,#7c3aed,#ec4899)'},sunset:{n:L.wall[4],css:'linear-gradient(135deg,#41295a,#c0392b,#f39c12)'},forest:{n:L.wall[5],css:'linear-gradient(135deg,#0b3d2e,#1b6b4a,#8fd694)'},
+ grafite:{n:L.wall[6],css:'#1b1d23'},ceu:{n:L.wall[7],css:'linear-gradient(135deg,#a1c4fd,#c2e9fb)'},rosa:{n:L.wall[8],css:'linear-gradient(135deg,#fbc2eb,#a6c1ee)'}};
 var NEWS=[
  '**IA dentro do app:** baixe um modelo em Configurações > Modelos e converse sem internet e sem instalar Ollama ou LM Studio. Você escolhe qual usar e pode baixar outros.',
  '**Visual novo:** o chat do app agora é igual ao do site, com a logo da Azul Groove, fundo com cores que mudam sozinhas, equalizador e esferas animadas.',
@@ -1388,7 +1426,7 @@ mq.onchange=applyTheme;
 function setTheme(v){S.theme=v;applyTheme();send('lchat:theme:'+v)}
 $('themeBtn').onclick=function(){setTheme(effTheme()==='light'?'dark':'light')};
 function paintTheme(){
- var o=[['auto','Automático'],['light','Claro'],['dark','Escuro']];
+ var o=[['auto',t('p.th.auto')],['light',t('p.th.light')],['dark',t('p.th.dark')]];
  $('thSeg').innerHTML=o.map(function(x){return '<button data-th="'+x[0]+'" class="'+(S.theme===x[0]?'on':'')+'">'+x[1]+'</button>'}).join('');
 }
 $('thSeg').onclick=function(e){var b=e.target.closest('button');if(b)setTheme(b.dataset.th)};
@@ -1403,7 +1441,7 @@ function applyLook(){
  var items=Object.keys(WALLS);if(WALLIMG)items.push('img');
  $('walls').innerHTML=items.map(function(id){var w=WALLS[id]||{n:'Minha imagem'};
   return '<button class="sw '+(l.wall===id?'on':'')+'" data-w="'+id+'" title="'+w.n+'" style="background:'+(w.css||'var(--soft)')+'">'+(id==='none'?ic('ban',18):id==='img'?ic('image',18):'')+'</button>'}).join('');
- $('fxSeg').innerHTML=[['all','Completo'],['orbs','Esferas'],['eq','Equalizador'],['off','Desligado']].map(function(x){return '<button data-f="'+x[0]+'" class="'+(l.fx===x[0]?'on':'')+'">'+x[1]+'</button>'}).join('');
+ $('fxSeg').innerHTML=[['all',ct('effectsFull')],['orbs',ct('effectsOrbs')],['eq',ct('effectsEq')],['off',ct('effectsOff')]].map(function(x){return '<button data-f="'+x[0]+'" class="'+(l.fx===x[0]?'on':'')+'">'+x[1]+'</button>'}).join('');
  $('lookAnim').checked=!!l.anim;$('lookColors').checked=!!l.colors;$('lookDim').value=l.dim;
 }
 function setLook(p){for(var k in p)S.look[k]=p[k];applyLook();send('lchat:look:'+JSON.stringify(S.look))}
@@ -1425,7 +1463,7 @@ $('wallFile').onchange=function(){
   im.src=fr.result};
  fr.readAsDataURL(f);
 };
-$('resetBtn').onclick=function(){askBox({title:'Restaurar a aparência?',text:'Tema, fundo, escurecimento, efeitos e animações voltam ao padrão.',ok:'Restaurar'},function(){send('lchat:resetlook')})};
+$('resetBtn').onclick=function(){askBox({title:ct('confirmResetLookTitle'),text:ct('confirmResetLookText'),ok:ct('confirmResetLookOk')},function(){send('lchat:resetlook')})};
 
 // ---------- preferências (estilo, memória, aprendizado) ----------
 function effTopics(){return S.prefs.topics&&S.prefs.topics.length?S.prefs.topics:Object.keys(TOPICS)}
@@ -1435,22 +1473,22 @@ function sg(k,on,label){return '<button data-k="'+k+'" class="'+(on?'on':'')+'">
 function paintPrefs(){
  var p=S.prefs,tb=Object.keys(TONES).map(function(k){return sg(k,p.tone===k,TONES[k])}).join('');
  $('toneSeg').innerHTML=tb;
- $('kbSeg').innerHTML=sg('auto',p.kb!=='off','Ligado (quando fizer sentido)')+sg('off',p.kb==='off','Desligado');
+ $('kbSeg').innerHTML=sg('auto',p.kb!=='off',ct('dataOn')+' ('+t('p.th.auto')+')')+sg('off',p.kb==='off',ct('dataOff'));
  $('prefDeep').checked=!!p.deep;$('prefLearn').checked=!!p.learn;
  var et=effTopics();
  $('topicBox').innerHTML=Object.keys(TOPICS).map(function(k){return '<label class="chk2"><input type="checkbox" data-t="'+k+'" '+(et.indexOf(k)>=0?'checked':'')+'> '+TOPICS[k]+'</label>'}).join('');
  if(document.activeElement!==$('prefStyle'))$('prefStyle').value=p.style||'';
- $('memList').innerHTML=p.mem.length?p.mem.map(function(t,i){return '<button type="button" title="Clique para remover" data-i="'+i+'">'+esc(t)+' ✕</button>'}).join(''):'<small>Nada por aqui ainda.</small>';
- $('likeBtn').innerHTML=ic('trash',15)+' Limpar aprendizado ('+(p.likes||0)+')';
- $('deepBtn').classList.toggle('on',!!p.deep);$('deepBtn').title='Modo aprofundado: '+(p.deep?'ligado':'desligado');
+ $('memList').innerHTML=p.mem.length?p.mem.map(function(m,i){return '<button type="button" title="'+esc(t('s3.remove'))+'" data-i="'+i+'">'+esc(m)+' ✕</button>'}).join(''):'<small>'+ct('memoryEmpty')+'</small>';
+ $('likeBtn').innerHTML=ic('trash',15)+' '+ct('clearLearning')+' ('+(p.likes||0)+')';
+ $('deepBtn').classList.toggle('on',!!p.deep);$('deepBtn').title=ct('deepLabel')+': '+(p.deep?ct('deepOn'):ct('deepOff'));
  paintModes();
 }
 function paintModes(){
  var p=S.prefs;
- $('modes').innerHTML='<span>Modo:</span>'+Object.keys(TONES).map(function(k){return '<button data-tone="'+k+'" class="'+(p.tone===k?'on':'')+'">'+TONES[k]+'</button>'}).join('')+'<span class="sep"></span>'
-  +'<button data-kb class="'+(p.kb==='off'?'':'on')+'" title="Liga ou desliga o assunto do bot Azul Groove nas respostas">Dados do Azul Groove: '+(p.kb==='off'?'desligado':'ligado')+'</button>'
-  +'<button data-deep class="'+(p.deep?'on':'')+'" title="Respostas mais completas (mais lento)">'+ic('layers',14)+' Aprofundado: '+(p.deep?'ligado':'desligado')+'</button>'
-  +'<button data-news>✨ Novidades</button>';
+ $('modes').innerHTML='<span>'+ct('mode')+':</span>'+Object.keys(TONES).map(function(k){return '<button data-tone="'+k+'" class="'+(p.tone===k?'on':'')+'">'+TONES[k]+'</button>'}).join('')+'<span class="sep"></span>'
+  +'<button data-kb class="'+(p.kb==='off'?'':'on')+'" title="'+ct('dataTitle')+'">'+ct('dataLabel')+': '+(p.kb==='off'?ct('dataOff'):ct('dataOn'))+'</button>'
+  +'<button data-deep class="'+(p.deep?'on':'')+'" title="'+ct('deepTitle')+'">'+ic('layers',14)+' '+ct('deepLabel')+': '+(p.deep?ct('deepOn'):ct('deepOff'))+'</button>'
+  +'<button data-news>✨ '+ct('news')+'</button>';
 }
 $('modes').onclick=function(e){var b=e.target.closest('button');if(!b)return;
  if(b.dataset.tone)setPrefs({tone:b.dataset.tone});
@@ -1470,28 +1508,73 @@ function memAdd(){var i=$('memIn'),v=i.value.trim().slice(0,200),m=S.prefs.mem.s
 $('memAddBtn').onclick=memAdd;
 $('memIn').onkeydown=function(e){if(e.key==='Enter'){e.preventDefault();memAdd()}};
 $('memList').onclick=function(e){var b=e.target.closest('button');if(!b)return;var m=S.prefs.mem.slice();m.splice(+b.dataset.i,1);setPrefs({mem:m})};
-$('likeBtn').onclick=function(){if(!S.prefs.likes)return toast('Nada para limpar');askBox({title:'Limpar o aprendizado?',text:'A IA esquece as respostas que você aprovou.',ok:'Limpar',danger:true},function(){S.prefs.likes=0;paintPrefs();send('lchat:clearlikes');toast('Aprendizado limpo')})};
+$('likeBtn').onclick=function(){if(!S.prefs.likes)return toast(ct('nothingToClear'));askBox({title:ct('clearLearning'),text:ct('confirmClearLearningText'),ok:ct('clearLearning'),danger:true},function(){S.prefs.likes=0;paintPrefs();send('lchat:clearlikes');toast(ct('clearLearning'))})};
 
 // ---------- ícones fixos ----------
-$('newBtn').innerHTML=lbl('plus','Nova conversa');
+$('newBtn').innerHTML=lbl('plus',t('s3.new'));
+$('hello').textContent=t('s3.hello');
+$('inp').placeholder=t('s3.ask');
+$('title').textContent=t('s3.new');
+$('send').title=t('s3.send');
+$('cfgTitle').textContent=t('s3.settings');
+$('cfgSub').textContent=t('s3.settingsSub');
+$('mdIntro').textContent=ct('modelsIntro');
+$('gpuLabel').textContent=ct('useGpu');
+$('gpuHint').textContent=ct('gpuHint');
+$('otherAiIntro').textContent=ct('otherAiIntro');
+$('providerLabel').textContent=ct('apiProvider');
+$('apiBaseLabel').textContent=ct('apiBase');
+$('apiKeyLabel').textContent=ct('apiKey');
+$('removeKeyLabel').textContent=ct('removeKey');
+$('modelLabel').textContent=ct('model');
+$('cfgFetch').textContent=ct('fetchModels');
+$('useWebsiteAiLabel').textContent=ct('useWebsiteAi');
+$('themeLabel').textContent=t('s3.appearance');
+$('themeHint').textContent=ct('themeHint');
+$('backgroundLabel').textContent=ct('background');
+$('dimLabel').textContent=ct('dim');
+$('homeEffectsLabel').textContent=ct('homeEffects');
+$('animatedColorsLabel').textContent=ct('animatedColors');
+$('animationsLabel').textContent=ct('animations');
+$('resetLookHint').textContent=ct('resetLookHint');
+$('settingsLocal').textContent=ct('settingsLocal');
+$('toneLabel').textContent=ct('tone');
+$('azulDataLabel').textContent=ct('azulData');
+$('dataOffHint').textContent=ct('dataOffHint');
+$('deepModeLabel').textContent=ct('deepMode');
+$('deepHint').textContent=ct('deepHint');
+$('curiositiesLabel').textContent=ct('curiosities');
+$('instructionsLabel').textContent=ct('instructions');
+$('prefStyle').placeholder=ct('instructionsHint');
+$('memoryLabel').textContent=ct('memory');
+$('memIn').placeholder=ct('memoryHint');
+$('memAddBtn').textContent=ct('add');
+$('learnLabel').textContent=ct('learn');
+$('websiteAiHint').textContent=ct('websiteAiHint');
+$('cfgCancel').textContent=t('s3.close');
+$('cfgSave').textContent=t('s3.save');
+$('news').querySelector('h3').textContent=ct('news');
+$('supClose').textContent=t('s3.close');
+$('supTitle').textContent=ct('supportTitle');
+$('supDescription').textContent=ct('supportDescription');
 $('backBtn').innerHTML=ic('home');
 $('menuBtn').innerHTML=ic('menu');
 $('deepBtn').innerHTML=ic('layers');
 $('newsBtn').innerHTML=ic('wand');
 $('cfgBtn').innerHTML=ic('gear');
 $('moreBtn').innerHTML=ic('more');
-$('cfgX').innerHTML=ic('x');$('newsX').innerHTML=ic('x');
+ $('cfgX').innerHTML=ic('x');$('newsX').innerHTML=ic('x');
 $('cfgIco').innerHTML=ic('sliders',20);$('newsIco').innerHTML=ic('wand',20);
-$('supBtn').innerHTML=ic('qr',16)+' Apoiar o projeto (QR Code)';
-$('supCopy').innerHTML=ic('copy',15)+' Copiar link';$('supOpen').innerHTML=ic('link',15)+' Abrir no navegador';
-$('secCon').innerHTML=ic('plug',14)+' Conexão';$('secDet').innerHTML=ic('spark',14)+' Detectados agora';$('secSite').innerHTML=ic('link',14)+' IA do site';
-$('secMd').innerHTML=ic('cpu',14)+' Modelos de IA';$('secAdd').innerHTML=ic('download',14)+' Adicionar outro modelo';$('secPerf').innerHTML=ic('sliders',14)+' Desempenho';
-$('mdUrlBtn').innerHTML=ic('download',15)+' Baixar';$('mdImpBtn').innerHTML=ic('file',15)+' Importar um .gguf do PC';
-$('wallBtn').innerHTML=ic('image',16)+' Usar minha imagem';
-$('resetBtn').innerHTML=ic('rotate',16)+' Restaurar padrão';
-$('expAllBtn').innerHTML=ic('download',16)+' Salvar todas as conversas (.json)';
-$('delAllBtn').innerHTML=ic('trash',16)+' Apagar todas as conversas';
-$('clrCfgBtn').innerHTML=ic('key',16)+' Remover chave e configurações da IA';
+$('supBtn').innerHTML=ic('qr',16)+' '+t('s3.actSupport');
+$('supCopy').innerHTML=ic('copy',15)+' '+ct('copyLink');$('supOpen').innerHTML=ic('link',15)+' '+ct('openBrowser');
+$('secCon').innerHTML=ic('plug',14)+' '+ct('connection');$('secDet').innerHTML=ic('spark',14)+' '+ct('detectedNow');$('secSite').innerHTML=ic('link',14)+' '+ct('websiteAi');
+$('secMd').innerHTML=ic('cpu',14)+' '+t('s3.models');$('secAdd').innerHTML=ic('download',14)+' '+ct('addModel');$('secPerf').innerHTML=ic('sliders',14)+' '+ct('performance');
+$('mdUrlBtn').innerHTML=ic('download',15)+' '+ct('download');$('mdImpBtn').innerHTML=ic('file',15)+' '+t('p.ai.imp.b');
+$('wallBtn').innerHTML=ic('image',16)+' '+ct('background');
+$('resetBtn').innerHTML=ic('rotate',16)+' '+ct('resetLook');
+$('expAllBtn').innerHTML=ic('download',16)+' '+t('s3.save');
+$('delAllBtn').innerHTML=ic('trash',16)+' '+t('s3.remove');
+$('clrCfgBtn').innerHTML=ic('key',16)+' '+ct('removeKey');
 $('mdlBtn').insertAdjacentHTML('afterbegin',ic('wand',15));
 $('mdlBtn').insertAdjacentHTML('beforeend',ic('chev',14));
 var DD={rename:['pen','Renomear'],export:['file','Salvar como .txt'],copyconv:['copy','Copiar conversa'],clear:['x','Limpar mensagens'],delcur:['trash','Apagar conversa'],delall:['trash','Apagar todas']};
@@ -1567,13 +1650,16 @@ function period(){var h=new Date().getHours();return h<5?'Boa madrugada':h<12?'B
 function calm(t){return S.prefs.tone==='serio'?t.replace(/\s*[\u{1F300}-\u{1FAFF}\u2728]\uFE0F?/gu,''):t}
 function animOn(){return !!S.look.anim&&!window.matchMedia('(prefers-reduced-motion: reduce)').matches}
 function pickGreeting(){
- var first=(S.name||'').split(' ')[0],n=first?'<b>'+esc(first)+'</b>':'',r=Math.random();
- var cs=(S.curios&&S.curios.length)?S.curios:CURIOS,et=effTopics();
- var pool=cs.filter(function(x){return et.indexOf(x.c)>=0});
- if(r<.25)return period()+(first?', '+n:'')+'! São <span class="clk">'+clock()+'</span>. '+(first?'Vamos nessa?':'Como posso ajudar?');
- if(r<.55&&pool.length){var x=rand(pool),lb=x.l||LBL[x.c]||'';return '<span class="cur">💡 <b>Curiosidade'+(lb?' de '+lb:'')+':</b> '+esc(x.t)+'</span>'}
- var opts=(first?GN.map(function(f){return f.replace('{n}',n)}):[]).concat(GA);
- return calm(rand(opts));
+ if(LANG==='pt-BR'){
+  var first=(S.name||'').split(' ')[0],n=first?'<b>'+esc(first)+'</b>':'',r=Math.random();
+  var cs=(S.curios&&S.curios.length)?S.curios:CURIOS,et=effTopics();
+  var pool=cs.filter(function(x){return et.indexOf(x.c)>=0});
+  if(r<.25)return period()+(first?', '+n:'')+'! São <span class="clk">'+clock()+'</span>. '+(first?'Vamos nessa?':'Como posso ajudar?');
+  if(r<.55&&pool.length){var x=rand(pool),lb=x.l||LBL[x.c]||'';return '<span class="cur">💡 <b>Curiosidade'+(lb?' de '+lb:'')+':</b> '+esc(x.t)+'</span>'}
+  var opts=(first?GN.map(function(f){return f.replace('{n}',n)}):[]).concat(GA);
+  return calm(rand(opts));
+ }
+ return esc(ct('greeting'+(1+Math.floor(Math.random()*8))));
 }
 var typeT=null;
 function typeInto(el,html){
@@ -1598,7 +1684,7 @@ function renderUser(){var av=$('av');if(S.avatar){av.src=S.avatar;av.style.displ
 function canSite(){return !!(S.preferSite&&S.siteAi&&(!S.siteAi.needsKey||S.siteAi.hasKey))}
 function renderSiteAi(){
  var a=S.siteAi,n=$('siteAiNote');
- if(!a){n.textContent='Abra o chat do site (com internet) para copiar a IA que está configurada lá.';return}
+ if(!a){n.textContent=ct('websiteAiNote');return}
  var p=preset(a.provider);
  n.textContent='IA do site: '+(p?p.name.replace(' (internet)',''):a.provider)+' · '+a.model+
   (a.needsKey&&!a.hasKey?' — ligue a opção, salve e abra o chat do site com internet para copiar a chave.':'. Se a internet cair, volta para a IA do seu PC.');
@@ -1636,7 +1722,7 @@ function closeSup(){$('supM').style.display='none'}
 $('supBtn').onclick=function(){$('supM').style.display='flex'};
 $('supClose').onclick=closeSup;
 $('supOpen').onclick=function(){send('lchat:support')};
-$('supCopy').onclick=function(){send('lchat:copy:https://livepix.gg/astmsoftware');toast('Link copiado')};
+$('supCopy').onclick=function(){send('lchat:copy:https://livepix.gg/astmsoftware');toast(ct('linkCopied'))};
 $('supM').onmousedown=function(e){this.dn=e.target===this};
 $('supM').onmouseup=function(e){if(this.dn&&e.target===this)closeSup();this.dn=false};
 
@@ -1682,23 +1768,24 @@ function grpOf(t){
  var n=new Date(),s=new Date(n.getFullYear(),n.getMonth(),n.getDate()).getTime()/1000;
  if(!t||t>=s)return 'Hoje';if(t>=s-86400)return 'Ontem';if(t>=s-6*86400)return 'Últimos 7 dias';return 'Mais antigas';
 }
+function displayConvTitle(c){return c.title==='Nova conversa'?t('s3.new'):c.title}
 function renderList(){
  var l=$('list');l.innerHTML='';var last='';
  S.convs.forEach(function(c){
   var g=grpOf(c.t);if(g!==last){var h=document.createElement('div');h.className='grp';h.textContent=g;l.appendChild(h);last=g}
   var d=document.createElement('div');d.className='conv'+(c.id===S.cur?' on':'');
   d.insertAdjacentHTML('afterbegin',ic('chat',16));
-  var s=document.createElement('span');s.textContent=c.title;d.appendChild(s);
+  var s=document.createElement('span');s.textContent=displayConvTitle(c);d.appendChild(s);
   if(c.site){var e=document.createElement('em');e.textContent='site';e.title='Conversa copiada do chat do site';d.appendChild(e)}
   var b=document.createElement('button');b.innerHTML=ic('trash',15);b.title='Apagar';
-  b.onclick=function(ev){ev.stopPropagation();if(busy)return;askBox({title:'Apagar esta conversa?',text:'Ela some do chat offline e não dá para desfazer.',ok:'Apagar',danger:true},function(){send('lchat:del:'+c.id)})};
+  b.onclick=function(ev){ev.stopPropagation();if(busy)return;askBox({title:ct('confirmDeleteConversationTitle'),text:ct('confirmDeleteConversationText'),ok:ct('confirmDeleteConversationOk'),danger:true},function(){send('lchat:del:'+c.id)})};
   d.appendChild(b);
   d.onclick=function(){if(busy||c.id===S.cur)return;send('lchat:open:'+c.id);closeSide()};
   l.appendChild(d)});
  var c=S.convs.filter(function(x){return x.id===S.cur})[0];
- $('title').textContent=c?c.title:'Nova conversa';
+ $('title').textContent=c?displayConvTitle(c):t('s3.new');
 }
-function setBusy(b){busy=b;$('send').innerHTML=ic(b?'stop':'send');$('send').title=b?'Parar':'Enviar'}
+function setBusy(b){busy=b;$('send').innerHTML=ic(b?'stop':'send');$('send').title=t(b?'s3.stop':'s3.send')}
 setBusy(false);
 
 function doSend(text){
@@ -1732,21 +1819,21 @@ function nmClick(e){
 function paintNM(){
  if(!NM)return;
  var a=S.ai,items=a.items||[],rec=items.filter(function(x){return x.rec})[0]||items[0],have=items.filter(function(x){return x.have})[0];
- var h='<b class="nmt">Falta uma IA para responder</b>',working=busyEng()||!!a.dl;
+ var h='<b class="nmt">'+ct('noAiConfigured')+'</b>',working=busyEng()||!!a.dl;
  if(working){
-  h+='<small>'+(a.dl?'Baixando '+esc(mname(a.dl))+'…':esc(a.text||'Preparando a IA…'))+'</small>'
+  h+='<small>'+(a.dl?ct('download')+' '+esc(mname(a.dl))+'…':esc(a.text||ct('engineFirstUse')))+'</small>'
    +'<div class="pb"><i id="nmPb" style="width:'+(a.dl?0:(a.pct||0))+'%"></i></div>'
-   +'<small id="nmSt">'+(a.dl?'Começando…':'')+'</small><small>Quando terminar, sua pergunta é enviada sozinha.</small>'
-   +(a.dl?'<div class="nmr"><button class="btn2" data-a="cancel">Cancelar download</button></div>':'');
+   +'<small id="nmSt">'+(a.dl?ct('fetchingModels'):'')+'</small>'
+   +(a.dl?'<div class="nmr"><button class="btn2" data-a="cancel">'+t('s3.cancel')+' '+ct('download').toLowerCase()+'</button></div>':'');
  }else{
-  h+='<small>Escolha como você quer conversar:</small>';
+  h+='<small>'+t('s3.ask')+'</small>';
   if(a.phase==='error'&&a.text)h+='<div class="eng err">⚠️ '+esc(a.text)+'</div>';
-  if(have)h+=nmOpt('use',have.id,'spark','Usar '+have.name,'Já está baixada neste PC · funciona sem internet');
-  else if(rec)h+=nmOpt('dluse',rec.id,'download','Baixar a IA do Azul Groove',
-   a.online===false?'Sem internet agora: conecte-se uma vez para baixar':'Recomendada para o seu PC: '+rec.name+(rec.gb?' · '+rec.gb+' GB':'')+' · depois funciona sem internet',a.online===false);
-  h+=nmOpt('ia','','plug','Usar outra IA','Ollama, LM Studio, OpenRouter, OpenAI, Groq…');
-  h+=nmOpt('md','','cpu','Ver todos os modelos','Escolher, baixar ou importar um arquivo .gguf');
-  h+='<div class="nmr"><button class="btn2" data-a="retry">'+ic('rotate',14)+' Tentar de novo</button></div>';
+  if(have)h+=nmOpt('use',have.id,'spark',ct('useThis')+' '+have.name,ct('downloaded'));
+  else if(rec)h+=nmOpt('dluse',rec.id,'download',ct('download')+' Azul Groove',
+   a.online===false?t('s3.aiNoInternet'):ct('recommended')+': '+rec.name+(rec.gb?' · '+rec.gb+' GB':''),a.online===false);
+  h+=nmOpt('ia','','plug',t('s3.otherAi'),ct('otherAiIntro'));
+  h+=nmOpt('md','','cpu',t('s3.models'),ct('modelsIntro'));
+  h+='<div class="nmr"><button class="btn2" data-a="retry">'+ic('rotate',14)+' '+t('p.retry')+'</button></div>';
  }
  NM.el.innerHTML=h;
 }
@@ -1765,31 +1852,31 @@ function paintEng(){
  var a=S.ai,e=$('engBox'),h='',c='eng';
  if(busyEng()){h='⏳ '+esc(a.text)+(a.pct?' '+a.pct+'%':'')}
  else if(a.phase==='error'){c+=' err';h='⚠️ '+esc(a.text)}
- else if(a.running&&a.running===a.active){c+=' ok';h='✅ IA pronta, rodando neste PC (funciona sem internet).'}
- else if(!a.engineReady){h='ℹ️ O motor da IA (uns 40 MB) é baixado uma única vez, quando você usar um modelo pela primeira vez.'}
- else{h='ℹ️ Motor instalado. Escolha um modelo abaixo.'}
+ else if(a.running&&a.running===a.active){c+=' ok';h='✅ '+L.ready}
+ else if(!a.engineReady){h='ℹ️ '+ct('engineFirstUse')}
+ else{h='ℹ️ '+t('s3.aiChooseModel')}
  e.className=c;e.innerHTML=h;
 }
 function paintAi(){
  var a=S.ai;
  $('mdVk').checked=!!a.vulkan;
- $('mdRam').textContent=a.ramGb?'Seu PC tem cerca de '+a.ramGb+' GB de RAM. O modelo marcado como Recomendado é o que melhor combina com ele.':'';
+ $('mdRam').textContent=a.ramGb?ct('ramInfo').replace('{0}',a.ramGb):'';
  paintEng();
  $('mdList').innerHTML=(a.items||[]).map(function(m){
   var on=a.active===m.id,dl=a.dl===m.id,bt='';
-  if(dl)bt='<button class="btn2" data-a="cancel" data-id="'+m.id+'">Cancelar</button>';
-  else if(m.have){bt=(on?'<button class="btn2 ok" disabled>Em uso ✓</button>':'<button class="btn2 ok" data-a="use" data-id="'+m.id+'">Usar este</button>')+'<button class="btn2 dng" data-a="del" data-id="'+m.id+'" title="Apagar do PC">'+ic('trash',14)+'</button>'}
-  else bt='<button class="btn2 ok" data-a="dl" data-id="'+m.id+'">'+ic('download',14)+' Baixar'+(m.gb?' ('+m.gb+' GB)':'')+'</button>'+(m.custom?'<button class="btn2 dng" data-a="del" data-id="'+m.id+'" title="Tirar da lista">'+ic('trash',14)+'</button>':'');
-  var meta=(m.gb?m.gb+' GB':'')+(m.ram?' · pede ~'+m.ram+' GB de RAM':'')+(m.lic?' · '+esc(m.lic):'');
-  return '<div class="mdc'+(on?' on':'')+'"><div class="inf"><b>'+esc(m.name)+(m.rec?' <span class="tag">Recomendado</span>':'')+(m.have?' <span class="tag ok">Baixado</span>':'')+'</b><small>'+esc(m.desc)+'</small><small>'+meta+'</small>'
-   +(dl?'<div class="pb"><i id="pb_'+m.id+'"></i></div><small id="pt_'+m.id+'">Começando…</small>':'')+'</div><div class="bt">'+bt+'</div></div>';
+  if(dl)bt='<button class="btn2" data-a="cancel" data-id="'+m.id+'">'+t('s3.cancel')+'</button>';
+  else if(m.have){bt=(on?'<button class="btn2 ok" disabled>'+ct('useThis')+' ✓</button>':'<button class="btn2 ok" data-a="use" data-id="'+m.id+'">'+ct('useThis')+'</button>')+'<button class="btn2 dng" data-a="del" data-id="'+m.id+'" title="'+t('s3.remove')+'">'+ic('trash',14)+'</button>'}
+  else bt='<button class="btn2 ok" data-a="dl" data-id="'+m.id+'">'+ic('download',14)+' '+ct('download')+(m.gb?' ('+m.gb+' GB)':'')+'</button>'+(m.custom?'<button class="btn2 dng" data-a="del" data-id="'+m.id+'" title="'+t('s3.remove')+'">'+ic('trash',14)+'</button>':'');
+  var meta=(m.gb?m.gb+' GB':'')+(m.ram?' · '+m.ram+' GB RAM':'')+(m.lic?' · '+esc(m.lic):'');
+  return '<div class="mdc'+(on?' on':'')+'"><div class="inf"><b>'+esc(m.name)+(m.rec?' <span class="tag">'+ct('recommended')+'</span>':'')+(m.have?' <span class="tag ok">'+ct('downloaded')+'</span>':'')+'</b><small>'+esc(m.desc)+'</small><small>'+meta+'</small>'
+   +(dl?'<div class="pb"><i id="pb_'+m.id+'"></i></div><small id="pt_'+m.id+'"></small>':'')+'</div><div class="bt">'+bt+'</div></div>';
  }).join('');
 }
 $('mdList').onclick=function(e){var b=e.target.closest('button');if(!b||b.disabled)return;var id=b.dataset.id,x=b.dataset.a;
  if(x==='dl')send('lchat:mdl_dl:'+id);
  else if(x==='cancel')send('lchat:mdl_cancel');
  else if(x==='use')send('lchat:mdl_use:'+id);
- else if(x==='del'){askBox({title:'Apagar este modelo?',text:'Ele sai do PC. Você pode baixar de novo depois.',ok:'Apagar',danger:true},function(){send('lchat:mdl_del:'+id)})}};
+ else if(x==='del'){askBox({title:ct('confirmDeleteModelTitle'),text:ct('confirmDeleteModelText'),ok:ct('confirmDeleteModelOk'),danger:true},function(){send('lchat:mdl_del:'+id)})}};
 $('mdUrlBtn').onclick=function(){var v=$('mdUrl').value.trim();if(!v)return;send('lchat:mdl_url:'+v);$('mdUrl').value=''};
 $('mdImpBtn').onclick=function(){send('lchat:mdl_import')};
 $('mdVk').onchange=function(){S.ai.vulkan=this.checked;send('lchat:mdl_vulkan:'+(this.checked?'1':'0'))};
@@ -1797,15 +1884,15 @@ function renderStatus(){
  var p=preset(S.provider),name=p?p.name.replace(' (internet)',''):(S.base?'IA':'');
  var dot=S.up===true?'#3ba55d':(S.up===false?'#ed4245':'#80848e');
  var ai=$('aiInfo');ai.innerHTML='<i></i><span></span>';ai.firstChild.style.background=dot;
- ai.lastChild.textContent=S.base?(name+(S.model?' · '+mname(S.model):'')):'Nenhuma IA configurada';
+ ai.lastChild.textContent=S.base?(name+(S.model?' · '+mname(S.model):'')):ct('noAiConfigured');
  $('mdlName').textContent=S.model?mname(S.model):'Auto';
- var msg='',nb='Configurar';
+ var msg='',nb=t('s3.settings');
  if(busyEng()){msg=S.ai.text+(S.ai.pct?' '+S.ai.pct+'%':'');nb=''}
  else if(S.ai.phase==='error'&&S.provider==='azul'){msg=S.ai.text;nb='Ver modelos'}
- else if(!S.base&&!canSite()){msg='Nenhuma IA encontrada. Baixe a IA do Azul Groove (funciona sem internet) ou abra o Ollama / LM Studio.';nb='Escolher IA'}
- else if(S.up===false&&S.provider==='azul')msg='A IA do Azul Groove ainda não está ligada neste PC.';
- else if(S.up===false)msg='Não consegui conectar em '+name+'. Ele está aberto?';
- else if(S.up===true&&!S.models.length){msg='Essa IA ainda não tem nenhum modelo pronto.';nb='Escolher IA'}
+ else if(!S.base&&!canSite()){msg=ct('aiMissing');nb=ct('chooseAi')}
+ else if(S.up===false&&S.provider==='azul')msg=ct('aiNotRunning');
+ else if(S.up===false)msg=ct('connectionFailed').replace('{0}',name);
+ else if(S.up===true&&!S.models.length){msg=ct('noModelsReady');nb=ct('chooseAi')}
  $('nTxt').textContent=msg;$('nBtn').textContent=nb||'';$('nBtn').style.display=nb?'':'none';$('notice').style.display=msg?'flex':'none';
 }
 $('nBtn').onclick=function(){openCfg('md')};
@@ -1815,12 +1902,12 @@ $('moreBtn').onclick=function(e){e.stopPropagation();$('dd').classList.toggle('o
 $('dd').onclick=function(e){
  var b=e.target.closest('button');if(!b)return;$('dd').classList.remove('open');
  var a=b.dataset.a,c=S.convs.filter(function(x){return x.id===S.cur})[0];
- if(a==='rename'&&c){askBox({title:'Renomear conversa',text:'',input:true,value:c.title,ok:'Salvar'},function(t){if(t&&t.trim())send('lchat:rename:'+c.id+'|'+t.trim())})}
+ if(a==='rename'&&c){askBox({title:'Renomear conversa',text:'',input:true,value:displayConvTitle(c),ok:t('s3.save')},function(t){if(t&&t.trim())send('lchat:rename:'+c.id+'|'+t.trim())})}
  else if(a==='export')send('lchat:export');
  else if(a==='copyconv'){send('lchat:copyconv');toast('Conversa copiada')}
- else if(a==='clear'&&!busy)askBox({title:'Limpar as mensagens?',text:'A conversa continua na lista, só que vazia.',ok:'Limpar',danger:true},function(){send('lchat:clear')});
- else if(a==='delcur'&&c&&!busy)askBox({title:'Apagar esta conversa?',text:'Ela some do chat offline e não dá para desfazer.',ok:'Apagar',danger:true},function(){send('lchat:del:'+c.id)});
- else if(a==='delall'&&!busy)askBox({title:'Apagar todas as conversas?',text:'Não dá para desfazer.',ok:'Apagar tudo',danger:true},function(){send('lchat:delall')});
+ else if(a==='clear'&&!busy)askBox({title:ct('confirmClearMessagesTitle'),text:ct('confirmClearMessagesText'),ok:ct('confirmClearMessagesOk'),danger:true},function(){send('lchat:clear')});
+ else if(a==='delcur'&&c&&!busy)askBox({title:ct('confirmDeleteConversationTitle'),text:ct('confirmDeleteConversationText'),ok:ct('confirmDeleteConversationOk'),danger:true},function(){send('lchat:del:'+c.id)});
+ else if(a==='delall'&&!busy)askBox({title:ct('confirmDeleteAllTitle'),text:ct('confirmDeleteAllText'),ok:ct('confirmDeleteAllOk'),danger:true},function(){send('lchat:delall')});
 };
 
 // ---------- escolher o modelo ----------
@@ -1847,7 +1934,7 @@ $('mdlBtn').onclick=function(e){
 document.addEventListener('click',function(e){$('dd').classList.remove('open');if(!e.target.closest('#mdlPop'))closePop()});
 
 // ---------- configurações ----------
-var TABS=[['md','cpu','Modelos'],['ia','robot','Outras IAs'],['ap','palette','Aparência'],['es','wand','Estilo'],['da','db','Dados'],['co','user','Conta']];
+var TABS=[['md','cpu',t('s3.models')],['ia','robot',t('s3.otherAi')],['ap','palette',t('s3.appearance')],['es','wand',t('s3.style')],['da','db',t('s3.data')],['fb','send',t('fbb.t')],['co','user',t('s3.account')]];
 function tab(n){
  curTab=n;
  TABS.forEach(function(t){$('p_'+t[0]).hidden=t[0]!==n});
@@ -1862,11 +1949,11 @@ function tab(n){
 }
 $('tabs').onclick=function(e){var b=e.target.closest('button');if(b)tab(b.dataset.t)};
 $('expAllBtn').onclick=function(){send('lchat:exportall')};
-$('delAllBtn').onclick=function(){if(!busy)askBox({title:'Apagar todas as conversas?',text:'Não dá para desfazer.',ok:'Apagar tudo',danger:true},function(){send('lchat:delall')})};
-$('clrCfgBtn').onclick=function(){askBox({title:'Remover as configurações da IA?',text:'A chave e a conexão salvas neste app serão apagadas.',ok:'Remover',danger:true},function(){send('lchat:clearcfg');closeCfg();toast('Configurações da IA removidas')})};
+$('delAllBtn').onclick=function(){if(!busy)askBox({title:ct('confirmDeleteAllTitle'),text:ct('confirmDeleteAllText'),ok:ct('confirmDeleteAllOk'),danger:true},function(){send('lchat:delall')})};
+$('clrCfgBtn').onclick=function(){askBox({title:ct('confirmClearAiTitle'),text:ct('confirmClearAiText'),ok:ct('confirmClearAiOk'),danger:true},function(){send('lchat:clearcfg');closeCfg();toast(ct('confirmClearAiOk'))})};
 function renderDetected(){
  var d=$('det');d.innerHTML='';
- if(!S.detected.length){var s=document.createElement('small');s.textContent='Nenhum app de IA aberto no momento.';d.appendChild(s);return}
+ if(!S.detected.length){var s=document.createElement('small');s.textContent=ct('noneDetected');d.appendChild(s);return}
  S.detected.forEach(function(id){var p=preset(id);if(!p)return;
   var b=document.createElement('button');b.textContent='● '+p.name;
   b.onclick=function(){$('cfgProv').value=id;provChange()};d.appendChild(b)});
@@ -1879,7 +1966,7 @@ function renderCfgModels(){
 function provChange(){
  var p=preset($('cfgProv').value);
  if(p&&p.base)$('cfgBase').value=p.base;
- $('cfgKey').placeholder=p&&p.key?'cole a chave da API':'vazio para apps locais';
+ $('cfgKey').placeholder=p&&p.key?ct('keyHint'):ct('localKeyHint');
 }
 function openCfg(t){
  var sel=$('cfgProv');sel.innerHTML='';
@@ -1888,10 +1975,9 @@ function openCfg(t){
  $('cfgBase').value=S.base||'';$('cfgKey').value='';$('cfgClr').checked=false;
  $('clrRow').style.display=S.hasKey?'flex':'none';
  $('cfgModel').value=S.model||'';$('cfgMsg').textContent='';
- var p=preset(sel.value);$('cfgKey').placeholder=S.hasKey?'chave salva — deixe vazio para manter':(p&&p.key?'cole a chave da API':'vazio para apps locais');
+ var p=preset(sel.value);$('cfgKey').placeholder=S.hasKey?ct('keySavedHint'):(p&&p.key?ct('keyHint'):ct('localKeyHint'));
  CM=S.models.slice();renderCfgModels();renderDetected();
- var n=S.convs.filter(function(c){return c.site}).length;
- $('siteNote').textContent=n?('🌐 '+n+' conversa(s) do chat do site copiada(s) para cá.'):'🌐 Com internet, as conversas do chat do site são copiadas para cá automaticamente.';
+ $('siteNote').textContent=ct('siteCopyInfo');
  $('cfgSite').checked=!!S.preferSite;renderSiteAi();
  tab(typeof t==='string'?t:curTab);
  $('cfg').style.display='flex';send('lchat:probe');
@@ -1901,7 +1987,7 @@ $('cfgProv').onchange=provChange;
 $('cfgBtn').onclick=function(e){e.stopPropagation();openCfg()};
 $('cfgX').onclick=closeCfg;$('cfgCancel').onclick=closeCfg;
 $('cfgModel').oninput=renderCfgModels;
-$('cfgFetch').onclick=function(){$('cfgMsg').textContent='Buscando modelos...';send('lchat:cfgmodels:'+JSON.stringify({base:$('cfgBase').value,key:$('cfgKey').value}))};
+$('cfgFetch').onclick=function(){$('cfgMsg').textContent=ct('fetchingModels');send('lchat:cfgmodels:'+JSON.stringify({base:$('cfgBase').value,key:$('cfgKey').value}))};
 $('cfgSave').onclick=function(){send('lchat:cfg:'+JSON.stringify({provider:$('cfgProv').value,base:$('cfgBase').value,key:$('cfgKey').value,clearKey:$('cfgClr').checked,model:$('cfgModel').value,preferSite:$('cfgSite').checked}))};
 $('cfg').onmousedown=function(e){this.dn=e.target===this};
 $('cfg').onmouseup=function(e){if(this.dn&&e.target===this)closeCfg();this.dn=false};
@@ -1949,9 +2035,9 @@ window.__lc={
  },
  cfgModels:function(d){
   CM=d.models||[];renderCfgModels();
-  $('cfgMsg').textContent=d.ok?(CM.length?CM.length+' modelo(s) encontrado(s). Clique para escolher.':'Conectou, mas não há modelos instalados.'):'⚠️ Não consegui conectar: '+d.err;
+  $('cfgMsg').textContent=d.ok?(CM.length?ct('modelsFound').replace('{0}',CM.length):ct('noModelsInstalled')):'⚠️ '+d.err;
  },
- cfgResult:function(d){if(d.ok){closeCfg();toast('Conexão salva')}else $('cfgMsg').textContent='⚠️ '+d.msg},
+ cfgResult:function(d){if(d.ok){closeCfg();toast(t('rpc.saved'))}else $('cfgMsg').textContent='⚠️ '+d.msg},
  chunk:function(c){
   if(!curMsg)curMsg=addMsg('bot','',0,true);
   initOut();q+=c;kick();

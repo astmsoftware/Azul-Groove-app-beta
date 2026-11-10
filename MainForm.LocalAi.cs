@@ -167,13 +167,17 @@ public partial class MainForm
         var rec = ram >= 15 ? "qwen25-7b" : ram >= 7 ? "llama32-3b" : "qwen25-15b";
         var list = new List<LAiItem>();
         foreach (var c in LAiCatalog)
-            list.Add(new LAiItem(c.Id, c.Name, c.Desc, c.Gb, c.Ram, c.Lic, File.Exists(LAiModelPath(c.Id)), false, c.Id == rec));
+        {
+            var key = "s3.chat.modelDesc." + c.Id;
+            var desc = Tr(key);
+            list.Add(new LAiItem(c.Id, c.Name, desc == key ? c.Desc : desc, c.Gb, c.Ram, c.Lic, File.Exists(LAiModelPath(c.Id)), false, c.Id == rec));
+        }
         foreach (var c in lai.Custom)
         {
             var p = LAiModelPath(c.Id);
             double gb = 0;
             try { if (File.Exists(p)) gb = Math.Round(new FileInfo(p).Length / 1073741824.0, 2); } catch { }
-            list.Add(new LAiItem(c.Id, c.Name, c.Url.Length > 0 ? "Baixado de um link." : "Arquivo do seu PC.", gb, 0, "", File.Exists(p), true, false));
+            list.Add(new LAiItem(c.Id, c.Name, c.Url.Length > 0 ? Tr("s3.aiFromLink") : Tr("s3.aiFromPc"), gb, 0, "", File.Exists(p), true, false));
         }
         return list.ToArray();
     }
@@ -244,10 +248,10 @@ public partial class MainForm
 
     async Task LAiDownloadModelAsync(string id, bool thenUse = false)
     {
-        if (laiDlCts != null) { await LChatPushAsync("aiMsg", "Já existe um download em andamento."); return; }
+        if (laiDlCts != null) { await LChatPushAsync("aiMsg", Tr("s3.aiAlreadyDownloading")); return; }
         var (url, dest) = LAiSource(id);
         if (url.Length == 0) return;
-        if (!NetworkUp()) { await LChatPushAsync("aiMsg", "Sem internet para baixar agora."); return; }
+        if (!NetworkUp()) { await LChatPushAsync("aiMsg", Tr("s3.aiNoInternet")); return; }
 
         var cts = laiDlCts = new CancellationTokenSource();
         laiDlId = id;
@@ -255,10 +259,10 @@ public partial class MainForm
         try
         {
             await LAiDownloadFileAsync(url, dest, (g, t) => _ = LChatPushAsync("aiDl", new { id, got = g, total = t }), cts.Token);
-            if (!thenUse) await LChatPushAsync("aiMsg", "Modelo baixado! Clique em \"Usar este\".");
+            if (!thenUse) await LChatPushAsync("aiMsg", Tr("s3.aiDownloaded"));
         }
-        catch (OperationCanceledException) { await LChatPushAsync("aiMsg", "Download cancelado. O que já foi baixado fica guardado para continuar depois."); }
-        catch (Exception ex) { await LChatPushAsync("aiMsg", "Falha no download: " + ex.Message); }
+        catch (OperationCanceledException) { await LChatPushAsync("aiMsg", Tr("s3.aiCancelled")); }
+        catch (Exception ex) { await LChatPushAsync("aiMsg", TrF("s3.aiFailed", ex.Message)); }
         finally
         {
             laiDlCts = null; laiDlId = "";
@@ -270,7 +274,7 @@ public partial class MainForm
     async Task LAiUseAsync(string id)
     {
         if (!LAiHave(id)) return;
-        if (lchatBusy) { await LChatPushAsync("aiMsg", "Espere a resposta terminar para trocar de IA."); return; }
+        if (lchatBusy) { await LChatPushAsync("aiMsg", Tr("s3.aiWait")); return; }
         lai.Active = id; lai.Save();
         var d = lchatData;
         d.Provider = "azul"; d.Base = LAiBase; d.Key = ""; d.Model = id; d.Save();
@@ -284,7 +288,7 @@ public partial class MainForm
     async Task LAiDeleteAsync(string id)
     {
         if (laiDlId == id) return;
-        if (lchatBusy) { await LChatPushAsync("aiMsg", "Espere a resposta terminar."); return; }
+        if (lchatBusy) { await LChatPushAsync("aiMsg", Tr("s3.aiWait")); return; }
         var cust = lai.Custom.FirstOrDefault(x => x.Id == id);
         var path = LAiModelPath(id);
         if (laiRunning == id) LAiStop();
@@ -294,7 +298,7 @@ public partial class MainForm
             if (path.Length > 0 && (cust == null || cust.Path.Length == 0) && File.Exists(path)) File.Delete(path);
             try { if (File.Exists(path + ".part")) File.Delete(path + ".part"); } catch { }
         }
-        catch (Exception ex) { await LChatPushAsync("aiMsg", "Não consegui apagar: " + ex.Message); }
+        catch (Exception ex) { await LChatPushAsync("aiMsg", TrF("s3.aiDeleteFailed", ex.Message)); }
         if (cust != null) lai.Custom.Remove(cust);
         if (lai.Active == id)
         {
@@ -311,10 +315,10 @@ public partial class MainForm
     {
         url = url.Trim();
         if (!Uri.TryCreate(url, UriKind.Absolute, out var u) || u.Scheme != Uri.UriSchemeHttps)
-        { await LChatPushAsync("aiMsg", "Use um link que comece com https://"); return; }
+        { await LChatPushAsync("aiMsg", Tr("s3.aiHttpsOnly")); return; }
         var file = Path.GetFileName(u.AbsolutePath);
         if (!file.EndsWith(".gguf", StringComparison.OrdinalIgnoreCase))
-        { await LChatPushAsync("aiMsg", "O link precisa ser de um arquivo .gguf"); return; }
+        { await LChatPushAsync("aiMsg", Tr("s3.aiGgufOnly")); return; }
         foreach (var ch in Path.GetInvalidFileNameChars()) file = file.Replace(ch, '_');
         // link da página do Hugging Face (/blob/) -> link de download (/resolve/)
         var dl = url.Replace("/blob/", "/resolve/");
@@ -330,7 +334,7 @@ public partial class MainForm
 
     async Task LAiImportAsync()
     {
-        using var dlg = new OpenFileDialog { Filter = "Modelo GGUF (*.gguf)|*.gguf", Title = "Escolha um modelo .gguf" };
+        using var dlg = new OpenFileDialog { Filter = "Modelo GGUF (*.gguf)|*.gguf", Title = Tr("s3.aiChooseModel") };
         if (dlg.ShowDialog(this) != DialogResult.OK) return;
         var f = dlg.FileName;
         if (lai.Custom.Any(x => x.Path == f)) return;
@@ -375,11 +379,11 @@ public partial class MainForm
         if (exe != null) return exe;
         if (!NetworkUp())
         {
-            LAiPhase("error", "O motor da IA ainda não está neste PC e não há internet para baixar. Conecte-se uma vez para baixar.");
+            LAiPhase("error", Tr("s3.aiEngineMissing"));
             return null;
         }
 
-        LAiPhase("download", "Baixando o motor da IA (só na primeira vez)…");
+        LAiPhase("download", Tr("s3.aiEngineDownloading"));
         string? url = null;
         // Não usa só "releases/latest": o GitHub às vezes publica a versão mais nova ANTES de terminar de subir os
         // arquivos (zips do Windows), e aí o "latest" vem sem motor. Então olha as últimas versões e pega a
@@ -415,9 +419,9 @@ public partial class MainForm
         var dir = Path.Combine(LAiEngineRoot, kind);
         var zip = Path.Combine(LAiEngineRoot, kind + ".zip");
         await LAiDownloadFileAsync(url, zip, (g, t) =>
-            LAiPhase("download", "Baixando o motor da IA (só na primeira vez)…", t > 0 ? (int)(g * 100 / t) : 0), CancellationToken.None);
+            LAiPhase("download", Tr("s3.aiEngineDownloading"), t > 0 ? (int)(g * 100 / t) : 0), CancellationToken.None);
 
-        LAiPhase("extract", "Instalando o motor…", 100);
+        LAiPhase("extract", Tr("s3.aiEngineInstalling"), 100);
         try { if (Directory.Exists(dir)) Directory.Delete(dir, true); } catch { }
         ZipFile.ExtractToDirectory(zip, dir, true);
         try { File.Delete(zip); } catch { }
@@ -430,18 +434,18 @@ public partial class MainForm
         try
         {
             var path = LAiModelPath(modelId);
-            if (path.Length == 0 || !File.Exists(path)) { LAiPhase("error", "Esse modelo ainda não foi baixado."); return false; }
+            if (path.Length == 0 || !File.Exists(path)) { LAiPhase("error", Tr("s3.aiModelMissing")); return false; }
             if (laiProc is { HasExited: false } && laiRunning == modelId && laiRunningVk == lai.Vulkan && await LAiHealthAsync())
             { LAiPhase("ready", ""); return true; }
 
             LAiStop();
             string? exe;
             try { exe = await LAiEnsureEngineAsync(); }
-            catch (Exception ex) { LAiPhase("error", "Não consegui baixar o motor da IA: " + ex.Message); return false; }
+            catch (Exception ex) { LAiPhase("error", TrF("s3.aiEngineDownloadFailed", ex.Message)); return false; }
             if (exe == null) return false;
 
             LAiKillOrphans();
-            LAiPhase("load", "Carregando a IA na memória…");
+            LAiPhase("load", Tr("s3.aiLoading"));
 
             var psi = new ProcessStartInfo(exe)
             {
@@ -467,7 +471,7 @@ public partial class MainForm
             lock (laiLog) laiLog.Clear();
 
             try { p.Start(); }
-            catch (Exception ex) { LAiPhase("error", "Não consegui iniciar o motor da IA: " + ex.Message); return false; }
+            catch (Exception ex) { LAiPhase("error", TrF("s3.aiEngineStartFailed", ex.Message)); return false; }
             p.BeginOutputReadLine();
             p.BeginErrorReadLine();
             laiProc = p; laiRunning = modelId; laiRunningVk = lai.Vulkan;
@@ -477,7 +481,7 @@ public partial class MainForm
             {
                 if (p.HasExited)
                 {
-                    LAiPhase("error", "A IA fechou ao iniciar. " + LAiLastLog());
+                    LAiPhase("error", TrF("s3.aiStartClosed", LAiLastLog()));
                     laiProc = null; laiRunning = "";
                     return false;
                 }
@@ -485,7 +489,7 @@ public partial class MainForm
                 await Task.Delay(500);
             }
             LAiStop();
-            LAiPhase("error", "A IA demorou demais para carregar. Tente um modelo menor.");
+            LAiPhase("error", Tr("s3.aiLoadTimeout"));
             return false;
         }
         finally { laiGate.Release(); }

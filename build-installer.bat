@@ -1,8 +1,11 @@
 @echo off
-REM Gera o .exe e depois o instalador (installer\AzulGroove-Setup.exe)
+REM Gera o .exe e depois o instalador (installer\AzulGrooveBeta-Setup.exe)
 REM Precisa de: .NET 8 SDK  +  Inno Setup 6.6 ou mais novo (https://jrsoftware.org/isdl.php)
 
 dotnet publish -c Release -o publish
+if errorlevel 1 goto erro
+
+dotnet publish UninstallAssistant\AzulGrooveUninstall.csproj -c Release -o publish
 if errorlevel 1 goto erro
 
 set ISCC=
@@ -23,7 +26,7 @@ if "%ISCC%"=="" (
 if errorlevel 1 goto erro
 
 echo.
-echo Pronto! Instalador: installer\AzulGroove-Setup.exe
+echo Pronto! Instalador: installer\AzulGrooveBeta-Setup.exe
 pause
 exit /b 0
 

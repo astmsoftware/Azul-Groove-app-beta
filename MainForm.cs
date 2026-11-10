@@ -35,7 +35,7 @@ public partial class MainForm : Form
     [DllImport("dwmapi.dll")] static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int value, int size);
 
     internal static string DataDir => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AzulGroove");
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AzulGrooveBeta"); // pasta propria da Beta (a versao normal usa "AzulGroove")
 
     // true só na primeiríssima abertura (a pasta de dados ainda não existe; o WebView2 a cria logo depois)
     static readonly bool firstRun = !Directory.Exists(DataDir);
@@ -45,25 +45,32 @@ public partial class MainForm : Form
     NotifyIcon tray = null!;
     ContextMenuStrip trayMenu = null!;
     ToolStripMenuItem miChat = null!, miHotkeyOn = null!, miKeys = null!, miTray = null!, miTheme = null!;
+    ToolStripMenuItem miHome = null!, miPanel = null!, miPrefs = null!, miExit = null!, miLocalChat = null!; // guardados para trocar o idioma da bandeja ao vivo
     bool exiting, tipShown, skipSplash, pendingSitePref;
     string? pageTheme; // "light" | "dark" (enviado pela página)
 
     public MainForm()
     {
-        Text = "Azul Groove";
+        Text = "Azul Groove Beta";
         Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath) ?? Icon;
         StartPosition = FormStartPosition.CenterScreen;
         Size = new Size(1200, 800);
         MinimumSize = new Size(480, 600);
         Controls.Add(web);
+        FbStartSession();
         BuildTray();
         RpcInit();
         Load += async (_, _) => await InitWebAsync();
         // Se o usuário troca o tema do Windows e a página ainda não informou o dela, acompanha o Windows
-        Microsoft.Win32.SystemEvents.UserPreferenceChanged += (_, _) =>
-        {
-            if (pageTheme == null && cfg.Theme == 0 && !IsDisposed) BeginInvoke(() => ApplyTheme(WindowsIsDark()));
-        };
+        Microsoft.Win32.SystemEvents.UserPreferenceChanged += OnUserPrefChanged;
+    }
+
+    // Método próprio (e não lambda) para poder desligar o evento ao fechar: o SystemEvents é estático e
+    // segura o formulário na memória / pode travar o fechamento se continuar ligado.
+    void OnUserPrefChanged(object? sender, Microsoft.Win32.UserPreferenceChangedEventArgs e)
+    {
+        try { if (pageTheme == null && cfg.Theme == 0 && !IsDisposed && IsHandleCreated) BeginInvoke(() => ApplyTheme(WindowsIsDark())); }
+        catch { }
     }
 
     // ================= Bandeja + atalho =================
@@ -72,18 +79,19 @@ public partial class MainForm : Form
         var menu = new ContextMenuStrip();
         trayMenu = menu;
 
-        miChat = new ToolStripMenuItem("Abrir chat", null, (_, _) => ShowChat());
-        var miHome = new ToolStripMenuItem("Abrir início", null, (_, _) => { ShowWindow(); NavigateTo(HomeUrl); });
-        var miPanel = new ToolStripMenuItem("Abrir painel", null, (_, _) => { ShowWindow(); ShowPanel(); });
+        // Os textos dos itens são colocados por TrayRetranslate() (no fim deste método e a cada troca de idioma)
+        miChat = new ToolStripMenuItem("", null, (_, _) => ShowChat());
+        miHome = new ToolStripMenuItem("", null, (_, _) => { ShowWindow(); NavigateTo(HomeUrl); });
+        miPanel = new ToolStripMenuItem("", null, (_, _) => { ShowWindow(); ShowPanel(); });
 
-        miHotkeyOn = new ToolStripMenuItem("Atalho de teclado para abrir o chat") { CheckOnClick = true, Checked = cfg.HotkeyOn };
+        miHotkeyOn = new ToolStripMenuItem("") { CheckOnClick = true, Checked = cfg.HotkeyOn };
         miHotkeyOn.CheckedChanged += (_, _) => { cfg.HotkeyOn = miHotkeyOn.Checked; cfg.Save(); RegisterHotkey(); UpdateLabels(); };
 
-        miKeys = new ToolStripMenuItem("Tecla do atalho");
+        miKeys = new ToolStripMenuItem("");
         for (int i = 0; i < Presets.Length; i++)
         {
             int idx = i;
-            var item = new ToolStripMenuItem(Presets[i].Label) { Checked = i == cfg.Preset };
+            var item = new ToolStripMenuItem(PresetLabel(i)) { Checked = i == cfg.Preset };
             item.Click += (_, _) =>
             {
                 cfg.Preset = idx; cfg.Save();
@@ -94,12 +102,11 @@ public partial class MainForm : Form
             miKeys.DropDownItems.Add(item);
         }
 
-        miTheme = new ToolStripMenuItem("Tema (claro / escuro)");
-        string[] themeNames = { "Automático (segue o Windows)", "Claro", "Escuro" };
-        for (int i = 0; i < themeNames.Length; i++)
+        miTheme = new ToolStripMenuItem("");
+        for (int i = 0; i < 3; i++)   // 0 = automático, 1 = claro, 2 = escuro (nomes em TrayRetranslate)
         {
             int idx = i;
-            var item = new ToolStripMenuItem(themeNames[i]) { Checked = i == cfg.Theme };
+            var item = new ToolStripMenuItem("") { Checked = i == cfg.Theme };
             item.Click += (_, _) =>
             {
                 cfg.Theme = idx; cfg.Save();
@@ -110,22 +117,48 @@ public partial class MainForm : Form
             miTheme.DropDownItems.Add(item);
         }
 
-        miTray = new ToolStripMenuItem("Continuar na bandeja ao fechar a janela") { CheckOnClick = true, Checked = cfg.TrayOnClose };
+        miTray = new ToolStripMenuItem("") { CheckOnClick = true, Checked = cfg.TrayOnClose };
         miTray.CheckedChanged += (_, _) => { cfg.TrayOnClose = miTray.Checked; cfg.Save(); };
 
-        var miExit = new ToolStripMenuItem("Sair", null, (_, _) => { exiting = true; Close(); });
+        miExit = new ToolStripMenuItem("", null, (_, _) => { exiting = true; Close(); });
+
+        // Menu enxuto: o que se usa todo dia fica na frente; tema/atalho/bandeja ficam em "Preferências"
+        miPrefs = new ToolStripMenuItem("");
+        miPrefs.DropDownItems.AddRange(new ToolStripItem[] { miTheme, miHotkeyOn, miKeys, miTray });
 
         menu.Items.AddRange(new ToolStripItem[]
         {
             new ToolStripMenuItem("Azul Groove  ·  " + AppVersion) { Enabled = false }, new ToolStripSeparator(),
             miChat, miPanel, miHome, new ToolStripSeparator(),
-            miTheme, miHotkeyOn, miKeys, miTray, OfflineMenuItem(), LocalChatMenuItem(), RpcMenuItem(), new ToolStripSeparator(),
+            OfflineMenuItem(), miLocalChat = LocalChatMenuItem(), RpcMenuItem(), new ToolStripSeparator(),
+            miPrefs, new ToolStripSeparator(),
             miExit
         });
 
         tray = new NotifyIcon { Icon = Icon ?? SystemIcons.Application, Text = "Azul Groove Beta " + AppVersion, Visible = true, ContextMenuStrip = menu };
         tray.DoubleClick += (_, _) => ShowChat();
         ApplyMenuTheme(cfg.Theme == 1 ? false : cfg.Theme == 2 ? true : WindowsIsDark());
+        TrayRetranslate();
+    }
+
+    /// <summary>Coloca (ou troca ao vivo) os textos da bandeja no idioma atual.
+    /// O item "Modo offline" vem de MainForm.Offline.cs e entra aqui na etapa 3.</summary>
+    void TrayRetranslate()
+    {
+        if (trayMenu == null) return;
+        miHome.Text = Tr("tray.home");
+        miPanel.Text = Tr("tray.panel");
+        miLocalChat.Text = Tr("tray.localchat");
+        miHotkeyOn.Text = Tr("tray.hk");
+        miKeys.Text = Tr("tray.keys");
+        for (int i = 0; i < miKeys.DropDownItems.Count && i < Presets.Length; i++) miKeys.DropDownItems[i].Text = PresetLabel(i);
+        miTheme.Text = Tr("tray.theme");
+        string[] themeKeys = { "tray.th.auto", "tray.th.light", "tray.th.dark" };
+        for (int i = 0; i < miTheme.DropDownItems.Count && i < themeKeys.Length; i++) miTheme.DropDownItems[i].Text = Tr(themeKeys[i]);
+        miTray.Text = Tr("tray.tray");
+        miPrefs.Text = Tr("tray.prefs");
+        miExit.Text = Tr("tray.exit");
+        RpcTrayRetranslate();
         UpdateLabels();
     }
 
@@ -271,11 +304,11 @@ public partial class MainForm : Form
         }
     }
 
-    string HotkeyText => cfg.HotkeyOn ? Presets[cfg.Preset].Label : "";
+    string HotkeyText => cfg.HotkeyOn ? PresetLabel(cfg.Preset) : "";
 
     void UpdateLabels()
     {
-        miChat.Text = cfg.HotkeyOn ? $"Abrir chat    ({HotkeyText})" : "Abrir chat";
+        miChat.Text = cfg.HotkeyOn ? $"{Tr("tray.chat")}    ({HotkeyText})" : Tr("tray.chat");
     }
 
     void RegisterHotkey()
@@ -287,9 +320,7 @@ public partial class MainForm : Form
         var p = Presets[cfg.Preset];
         hotkeyOk = RegisterHotKey(Handle, HOTKEY_ID, p.Mod | MOD_NOREPEAT, (uint)p.Key);
         if (!hotkeyOk)
-            tray.ShowBalloonTip(4000, "Azul Groove",
-                $"Não foi possível usar {p.Label} (outro programa já usa). Escolha outra tecla no ícone da bandeja.",
-                ToolTipIcon.Warning);
+            tray.ShowBalloonTip(4000, "Azul Groove", TrF("bal.hkfail", PresetLabel(cfg.Preset)), ToolTipIcon.Warning);
     }
 
     protected override void WndProc(ref Message m)
@@ -300,6 +331,7 @@ public partial class MainForm : Form
 
     void ShowWindow()
     {
+        ResumeWeb();
         if (!Visible) Show();
         if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
         Activate();
@@ -332,27 +364,41 @@ public partial class MainForm : Form
         NavigateTo(ChatUrl);
     }
 
+    public void ExitForUninstall()
+    {
+        exiting = true;
+        Close();
+    }
+
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
         if (!exiting && cfg.TrayOnClose && e.CloseReason == CloseReason.UserClosing)
         {
             e.Cancel = true;
             Hide();
+            _ = SuspendWebAsync(); // na bandeja o app não gasta CPU/memória à toa (não suspende se estiver tocando áudio)
             if (!tipShown)
             {
                 tipShown = true;
                 tray.ShowBalloonTip(3500, "Azul Groove",
-                    cfg.HotkeyOn ? $"O app continua na bandeja. Aperte {HotkeyText} para abrir o chat."
-                                 : "O app continua na bandeja. Clique duas vezes no ícone para abrir.",
+                    cfg.HotkeyOn ? TrF("bal.tray.hk", HotkeyText) : Tr("bal.tray.nohk"),
                     ToolTipIcon.Info);
             }
             return;
         }
+        FbBeginShutdown(); // a partir daqui é fechamento normal: nenhum erro de "desmontagem" vira relatório
+        Microsoft.Win32.SystemEvents.UserPreferenceChanged -= OnUserPrefChanged;
         RpcShutdown();
         OfflineShutdown();
         tray.Visible = false;
         tray.Dispose();
         base.OnFormClosing(e);
+    }
+
+    protected override void OnFormClosed(FormClosedEventArgs e)
+    {
+        FbEndSession(); // fechou normalmente: apaga a marca "app aberto"
+        base.OnFormClosed(e);
     }
 
     // ================= Tema claro/escuro =================
@@ -590,12 +636,14 @@ h1{margin:0;color:var(--tx);font-size:32px;font-weight:600;letter-spacing:.4px;a
         web.CoreWebView2.NavigationCompleted += (_, _) => { if (pendingSitePref) _ = PushSiteThemeAsync(); };
         await web.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync(ThemeScript);
         web.CoreWebView2.NavigationCompleted += (_, _) => { BetaOnNavigationCompleted(); };
+        web.CoreWebView2.NavigationCompleted += (_, _) => { FbOnNavigationCompleted(); };
         web.CoreWebView2.NavigationCompleted += OfflineOnNavigationCompleted;
         OfflineInit();
         web.CoreWebView2.WebMessageReceived += (_, e) =>
         {
             if (HandleRpcMessage(e)) return;
             if (HandleRpcPanelMessage(e)) return;
+            if (HandleFeedbackMessage(e)) return;
             if (HandleOfflineMessage(e)) return;
             if (HandleLocalChatMessage(e)) return;
             if (HandleBetaMessage(e)) return;
@@ -608,7 +656,7 @@ h1{margin:0;color:var(--tx);font-size:32px;font-weight:600;letter-spacing:.4px;a
 
         web.CoreWebView2.DocumentTitleChanged += (_, _) =>
             Text = string.IsNullOrWhiteSpace(web.CoreWebView2.DocumentTitle)
-                ? "Azul Groove" : web.CoreWebView2.DocumentTitle;
+                ? "Azul Groove Beta" : web.CoreWebView2.DocumentTitle;
 
         // Links com target="_blank": login abre em popup do app; o resto vai pro navegador
         web.CoreWebView2.NewWindowRequested += (_, e) =>
@@ -641,7 +689,9 @@ h1{margin:0;color:var(--tx);font-size:32px;font-weight:600;letter-spacing:.4px;a
             }
         };
 
+        _ = FbCheckPendingAsync(); // se o app caiu da última vez, envia o relatório sozinho
         await PlaySplashAsync();
+        _ = MusicPromoAsync(); // mensagem de divulgação do Azul Groove Music (uma vez por abertura)
         await BetaAfterStartAsync();
     }
 
@@ -675,7 +725,7 @@ h1{margin:0;color:var(--tx);font-size:32px;font-weight:600;letter-spacing:.4px;a
             using var p = System.Diagnostics.Process.Start(psi);
             if (p == null) return false;
             await p.WaitForExitAsync();
-            Text = "Azul Groove";
+            Text = "Azul Groove Beta";
             return true;
         }
         catch { return false; }
@@ -708,11 +758,16 @@ sealed class AppSettings
     public bool OfflineMode { get; set; }          // modo offline: não usa a internet (só o painel local)
 
     // ---- Beta ----
+    public string Lang { get; set; } = "";         // idioma escolhido ("" = automático, segue o Windows)
     public string UserName { get; set; } = "";     // nome informado na configuração inicial
     public string UserType { get; set; } = "";     // tipo de usuário (Ouvinte, DJ, Streamer...)
     public bool SetupDone { get; set; }            // já passou pelo diálogo de boas-vindas
     public bool AutoUpdate { get; set; } = true;   // verificar atualização ao abrir
+    public bool AutoCrashReport { get; set; } = false; // OPCIONAL: vem desligado; só envia relatório de erro se a pessoa ligar
+    public int SettingsRev { get; set; }              // versão do arquivo de configuração (para migrações)
+    public bool FbDiag { get; set; } = true;       // anexar o diagnóstico nos feedbacks e relatórios
     public DateTime LastUpdateCheck { get; set; }  // última checagem (UTC)
+    public bool MusicPromoOff { get; set; }          // "Não mostrar mais" na mensagem do Azul Groove Music
     public string LastVersion { get; set; } = "";  // última versão que rodou (para avisar "Atualizado!")
 
     static string FilePath => Path.Combine(MainForm.DataDir, "settings.json");
@@ -725,6 +780,10 @@ sealed class AppSettings
             if (s.Preset < 0 || s.Preset > 2) s.Preset = 0;
             if (s.Theme < 0 || s.Theme > 2) s.Theme = 0;
             if (s.StartPage < 0 || s.StartPage > 2) s.StartPage = 0;
+            s.Lang ??= "";
+            // 1.2.0b: o envio automático de erros passou a vir DESLIGADO. Quem ficou com ele ligado "sem querer"
+            // (era o padrão antigo) volta para desligado uma única vez.
+            if (s.SettingsRev < 2) { s.AutoCrashReport = false; s.SettingsRev = 2; s.Save(); }
             return s;
         }
         catch { return new AppSettings(); }

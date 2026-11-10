@@ -1,6 +1,6 @@
-name: Gerar instalador do Azul Groove
+name: Gerar instalador do Azul Groove Beta
 
-# Roda sozinho a cada push na branch principal, ao criar uma tag v* (ex.: v1.0.0)
+# Roda sozinho a cada push na branch principal, ao criar uma tag v* (ex.: v1.2.7)
 # ou manualmente pela aba Actions -> "Run workflow".
 on:
   push:
@@ -46,13 +46,13 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
-          Copy-Item installer\AzulGroove-Setup.exe dist\AzulGroove-Setup.exe
-          Copy-Item publish\AzulGroove.exe dist\AzulGroove-Portable.exe
+          Copy-Item installer\AzulGrooveBeta-Setup.exe dist\AzulGrooveBeta-Setup.exe
+          Copy-Item publish\AzulGroove.exe dist\AzulGrooveBeta-Portable.exe
 
       - name: Guardar os arquivos (aba Actions -> Artifacts)
         uses: actions/upload-artifact@v4
         with:
-          name: AzulGroove
+          name: AzulGrooveBeta
           path: dist/*
 
       - name: Publicar na aba Releases (só quando for tag v*)

@@ -67,7 +67,7 @@ begin
   C.Font.Name := 'Segoe UI Semibold';
   C.Font.Size := 20;
   C.Font.Color := $FFFFFF;
-  t := 'Azul Groove';
+  t := 'Azul Groove Beta';
   C.TextOut((W - C.TextWidth(t)) div 2, H * 58 div 100, t);
 
   { status }

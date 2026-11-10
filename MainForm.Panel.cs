@@ -52,14 +52,11 @@ public partial class MainForm
         catch { return null; }
     }
 
-    static Version CurrentVersion
-    {
-        get
-        {
-            var v = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version ?? new Version(1, 0, 0);
-            return new Version(v.Major, v.Minor, Math.Max(v.Build, 0));
-        }
-    }
+    // Fonte única da versão: AppVersion (MainForm.Beta.cs). Antes isto lia a versão do assembly (csproj), que ficava
+    // desatualizada e fazia o app achar que não estava na versão mais recente ao verificar atualização.
+    static Version CurrentVersion => ParseVer(AppVersion) ?? new Version(1, 0, 0);
+
+    static string DisplayVersion => CurrentVersion.ToString();
 
     void ShowPanel()
     {
@@ -67,7 +64,15 @@ public partial class MainForm
         panelActive = true;
         pageTheme = null; // o painel não informa tema: a janela segue a escolha do usuário / Windows
         ApplyThemeMode(pushToSite: false);
-        web.CoreWebView2.NavigateToString(PanelHtml);
+        // direita-para-esquerda só se o idioma for RTL E já tiver os textos do painel (senão apareceria inglês espelhado)
+        var rtl = I18nList().Any(x => x.Rtl && x.Code.Equals(LangCode, StringComparison.OrdinalIgnoreCase))
+                  && I18nAll().TryGetValue(LangCode, out var own) && own.ContainsKey("p.title");
+        web.CoreWebView2.NavigateToString(PanelHtml
+            .Replace("@T@", PanelTextsJson())
+            .Replace("@LANG@", LangCode)
+            .Replace("@DIR@", rtl ? "rtl" : "ltr")
+            .Replace("@DD_SCROLL@", DropdownScrollbarCss)
+            .Replace("@DD_HELPER@", DropdownViewportScript));
     }
 
     void GoStart()
@@ -97,16 +102,19 @@ public partial class MainForm
         {
             type = "state",
             version = CurrentVersion.ToString(),
+            displayVersion = DisplayVersion,
             theme = cfg.Theme,
             hotkeyOn = cfg.HotkeyOn,
             preset = cfg.Preset,
-            presets = Presets.Select(p => p.Label).ToArray(),
+            presets = Presets.Select((p, i) => PresetLabel(i)).ToArray(),
             tray = cfg.TrayOnClose,
             start = cfg.StartPage,
             hotkeyOk,
-            hotkeyLabel = Presets[cfg.Preset].Label,
+            hotkeyLabel = PresetLabel(cfg.Preset),
             news = justUpdated,
-            aiMin = lai.StopOnMinimize
+            aiMin = lai.StopOnMinimize,
+            lang = string.IsNullOrEmpty(cfg.Lang) ? "auto" : cfg.Lang,
+            langs = I18nList().Select(x => new { code = x.Code, name = x.Name }).ToArray()
         });
         justUpdated = false; // as novidades abrem sozinhas só uma vez
     }
@@ -132,7 +140,8 @@ public partial class MainForm
         var cmd = p.Length > 1 ? p[1] : "";
         switch (cmd)
         {
-            case "get": PushPanelState(); break;
+            case "get": PushPanelState(); MusicPost("init", installed: FindMusicExe() != null); break;
+            case "music": _ = MusicGoAsync(); break;
             case "update": _ = CheckUpdateAsync(); break;
             case "data": OpenDataFolder(); break;
             case "open" when p.Length > 2:
@@ -151,6 +160,11 @@ public partial class MainForm
                 break;
             case "ext" when p.Length > 2:
                 if (p[2] == "releases") OpenExternal(ReleasesPage);
+                break;
+            case "lang" when p.Length > 2:
+                cfg.Lang = I18nNormalize(p[2]); cfg.Save();
+                TrayRetranslate();   // bandeja no novo idioma
+                ShowPanel();         // recarrega o painel no novo idioma (ele pede o estado de novo sozinho)
                 break;
             case "set" when p.Length > 3 && int.TryParse(p[3], out var v):
                 ApplyPanelSetting(p[2], v);
@@ -244,7 +258,7 @@ public partial class MainForm
             using var r = await UpdHttp.SendAsync(req);
             if (r.StatusCode == HttpStatusCode.NotFound)
             {
-                PostToPanel(new { type = "update", status = "info", current = cur, latest = "", url = ReleasesPage, msg = "Ainda não há versão publicada no GitHub." });
+                PostToPanel(new { type = "update", status = "info", current = cur, latest = "", url = ReleasesPage, msg = Tr("pu.nopub") });
                 return;
             }
             r.EnsureSuccessStatusCode();
@@ -283,29 +297,29 @@ public partial class MainForm
                 if (dlUrl == null || !dlUrl.StartsWith(ReleaseDownloadPrefix, StringComparison.OrdinalIgnoreCase))
                 {
                     PostToPanel(new { type = "update", status = "new", current = cur, latest = latest.ToString(), url, auto = false,
-                        msg = "Não achei o instalador (Setup.exe) nessa versão, então baixe pela página." });
+                        msg = Tr("pu.nosetup") });
                     return;
                 }
                 if (!IsInstalledBySetup())
                 {
                     PostToPanel(new { type = "update", status = "new", current = cur, latest = latest.ToString(), url, auto = false,
-                        msg = "Você está usando a versão Portable: baixe a nova versão pela página." });
+                        msg = Tr("pu.portable") });
                     return;
                 }
 
                 // Clicou em "Verificar" e existe versão nova: baixa, executa e instala sozinho
-                PostToPanel(new { type = "update", status = "new", current = cur, latest = latest.ToString(), url, auto = true, msg = "Baixando automaticamente…" });
+                PostToPanel(new { type = "update", status = "new", current = cur, latest = latest.ToString(), url, auto = true, msg = Tr("pu.auto") });
                 await DownloadAndInstallAsync(dlUrl, latest.ToString(), digest, url);
             }
             else
             {
                 PostToPanel(new { type = "update", status = "info", current = cur, latest = tag, url,
-                    msg = $"A última versão publicada se chama “{tag}” e não tem número de versão, então não dá para comparar sozinho. Abra a página para conferir." });
+                    msg = TrF("pu.notag", tag) });
             }
         }
         catch
         {
-            PostToPanel(new { type = "update", status = "err", current = cur, latest = "", url = ReleasesPage, msg = "Não foi possível verificar agora. Confira sua internet e tente de novo." });
+            PostToPanel(new { type = "update", status = "err", current = cur, latest = "", url = ReleasesPage, msg = Tr("pu.err") });
         }
     }
 
@@ -415,7 +429,7 @@ public partial class MainForm
 
             // Avisa que o app vai reiniciar
             PostToPanel(new { type = "restart", seconds = 5 });
-            try { tray.ShowBalloonTip(3000, "Azul Groove", "Atualização pronta. O app será reiniciado…", ToolTipIcon.Info); } catch { }
+            try { tray.ShowBalloonTip(3000, "Azul Groove", Tr("pu.balloon"), ToolTipIcon.Info); } catch { }
             await Task.Delay(5000);
 
             // Instalação silenciosa (Inno Setup): sem assistente, sem janelas. Quando o instalador
@@ -438,27 +452,28 @@ public partial class MainForm
             try { if (file != null && File.Exists(file)) File.Delete(file); } catch { }
             try { File.Delete(UpdMarker); } catch { }
             PostToPanel(new { type = "update", status = "err", current = CurrentVersion.ToString(), latest = latest, url = pageUrl, auto = false,
-                msg = "Não consegui baixar/instalar a atualização automaticamente. Baixe pela página." });
+                msg = Tr("pu.dlfail") });
         }
         finally { updating = false; }
     }
 
     const string PanelHtml = """
-<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="color-scheme" content="dark light"><title>Azul Groove · Painel</title><style>
-:root{--bg:#0f1117;--card:#181b25;--line:#272c3b;--tx:#f2f4ff;--mu:#9aa3b2;--ac:#5865f2;--ac2:#7a5cff;color-scheme:dark}
-@media (prefers-color-scheme:light){:root{--bg:#f4f6fb;--card:#fff;--line:#e0e4ef;--tx:#14161a;--mu:#646b78;color-scheme:light}}
+<!doctype html><html lang="@LANG@" dir="@DIR@"><head><meta charset="utf-8"><meta name="color-scheme" content="dark light"><title>Azul Groove · Painel</title><style>
+:root{--bg:#0f1117;--card:#181b25;--line:#272c3b;--tx:#f2f4ff;--mu:#9aa3b2;--ac:#5865f2;--ac2:#7a5cff;--scroll-thumb:rgba(154,163,178,.55);--scroll-thumb-hover:#5865f2;color-scheme:dark}
+@media (prefers-color-scheme:light){:root{--bg:#f4f6fb;--card:#fff;--line:#e0e4ef;--tx:#14161a;--mu:#646b78;--scroll-thumb:rgba(100,107,120,.48);--scroll-thumb-hover:#5865f2;color-scheme:light}}
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:var(--bg);color:var(--tx);font-family:"Segoe UI",system-ui,sans-serif;padding:26px clamp(16px,4vw,44px) 50px;line-height:1.5}
 .w{max-width:880px;margin:0 auto}
 .hd{display:flex;align-items:center;gap:16px;margin-bottom:26px}
 .lg{width:62px;height:62px;border-radius:18px;background:linear-gradient(135deg,var(--ac),var(--ac2));display:flex;align-items:center;justify-content:center;gap:5px;box-shadow:0 10px 30px rgba(88,101,242,.45)}
-.lg i{width:6px;border-radius:3px;background:#fff;animation:eq 1s ease-in-out infinite}
+.lg i{width:6px;height:30px;border-radius:3px;background:#fff;transform:scaleY(.34);animation:eq 1s ease-in-out infinite;will-change:transform}
 .lg i:nth-child(1){animation-delay:-.9s}.lg i:nth-child(2){animation-delay:-.6s}.lg i:nth-child(3){animation-delay:-.3s}.lg i:nth-child(4){animation-delay:-.75s}.lg i:nth-child(5){animation-delay:-.15s}
-@keyframes eq{0%,100%{height:10px}50%{height:30px}}
+@keyframes eq{0%,100%{transform:scaleY(.34)}50%{transform:scaleY(1)}}
+@media (prefers-reduced-motion:reduce){.lg i{animation:none}}.hid .lg i{animation-play-state:paused}
 h1{font-size:1.6rem;letter-spacing:-.3px}.hd p{color:var(--mu);font-size:.92rem}
 h2{font-size:.78rem;letter-spacing:1.2px;text-transform:uppercase;color:var(--ac);margin:30px 0 10px}
 .g{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px}
-.b{display:flex;flex-direction:column;gap:2px;text-align:left;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;color:var(--tx);text-decoration:none;cursor:pointer;font:inherit;transition:.15s}
+.b{display:flex;flex-direction:column;gap:2px;text-align:left;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;color:var(--tx);text-decoration:none;cursor:pointer;font:inherit;transition:border-color .15s,transform .15s}
 .b:hover{border-color:var(--ac);transform:translateY(-2px)}.b small{color:var(--mu)}
 .b.p{background:linear-gradient(135deg,var(--ac),var(--ac2));border:0;color:#fff}.b.p small{color:#e6e9ff}
 .c{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:6px 18px}
@@ -472,10 +487,11 @@ h2{font-size:.78rem;letter-spacing:1.2px;text-transform:uppercase;color:var(--ac
 .ddb:hover,.dd.open .ddb{border-color:var(--ac)}
 .ddb::after{content:"";position:absolute;right:14px;top:50%;width:7px;height:7px;border-right:2px solid var(--mu);border-bottom:2px solid var(--mu);transform:translateY(-70%) rotate(45deg);transition:.2s}
 .dd.open .ddb::after{transform:translateY(-30%) rotate(225deg)}
-.ddl{display:none;position:absolute;right:0;top:calc(100% + 6px);min-width:100%;z-index:20;padding:5px;border-radius:12px;background:var(--card);border:1px solid var(--line);box-shadow:0 16px 40px rgba(0,0,0,.35)}
+.ddl{display:none;max-height:260px;overflow:auto;position:absolute;right:0;top:calc(100% + 6px);min-width:100%;z-index:20;padding:5px;border-radius:12px;background:var(--card);border:1px solid var(--line);box-shadow:0 16px 40px rgba(0,0,0,.35)}
 .dd.open .ddl{display:block}
 .ddo{padding:8px 12px;border-radius:8px;cursor:pointer;font-size:.88rem;white-space:nowrap}
 .ddo:hover{background:rgba(109,124,255,.18)}.ddo.sel{background:var(--ac);color:#fff}
+@DD_SCROLL@
 .in{background:var(--bg);color:var(--tx);border:1px solid var(--line);border-radius:10px;padding:8px 12px;font:inherit;font-size:.88rem;min-width:200px;outline:none;transition:.15s}
 .in:focus{border-color:var(--ac);box-shadow:0 0 0 3px rgba(88,101,242,.25)}
 .btn.dg{background:#d9455b}.btn:disabled{opacity:.5;cursor:default}
@@ -508,59 +524,68 @@ h2{font-size:.78rem;letter-spacing:1.2px;text-transform:uppercase;color:var(--ac
 .mdl h4{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.mdl p{color:var(--mu);font-size:.9rem;margin:4px 0}.mdl .meta{color:var(--mu);font-size:.8rem}
 .aitabs{display:inline-flex;margin-top:12px}.aipane{margin-top:12px}.aipane[hidden]{display:none}.aipane .ainote{margin-top:0}
 #ai-msg{margin-top:10px;color:var(--mu);font-size:.92rem}
+.mu{grid-column:1/-1;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:18px 22px;border-radius:16px;border:1px solid rgba(122,92,255,.55);background:linear-gradient(135deg,rgba(88,101,242,.24),rgba(122,92,255,.10)),var(--card)}
+.mu b{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:1.05rem}.mu small{display:block;color:var(--mu);margin-top:3px}
+.mu .mi{display:inline-flex;align-items:center;justify-content:center;flex:none;width:34px;height:34px;border-radius:10px;background:linear-gradient(135deg,#5865f2,#7a5cff);box-shadow:0 4px 14px rgba(106,92,255,.45)}#mu-btn{display:inline-flex;align-items:center;gap:8px}#mu-btn svg{flex:none}
+.mu .tg{letter-spacing:.5px;font-weight:700}#mu-st.er{color:#ed4245}
 </style></head><body><div class="w">
-<div class="hd"><div class="lg"><i></i><i></i><i></i><i></i><i></i></div><div><h1>Azul Groove</h1><p>Painel do app · versão <b id="ver">...</b></p></div></div>
+<div class="hd"><div class="lg"><i></i><i></i><i></i><i></i><i></i></div><div><h1>Azul Groove</h1><p><span data-i="p.sub"></span> <b id="ver">...</b></p></div></div>
 
-<h2>Ir para</h2>
+<h2 data-i="p.goto"></h2>
 <div class="g">
-<button class="b p" data-open="chat"><b>💬 Abrir o chat</b><small>Conversar com a IA</small></button>
-<button class="b" data-open="local"><b>🖥️ Chat offline</b><small>IA no seu PC, sem ligar o modo offline</small></button>
-<button class="b" data-open="login"><b>👤 Entrar na conta</b><small>Discord, Google ou GitHub</small></button>
-<button class="b" data-open="home"><b>🏠 Site Azul Groove</b><small>Página inicial</small></button>
-<button class="b" data-open="ia"><b>✨ Azul Groove IA</b><small>Conheça a IA</small></button>
-<button class="b" data-open="docs"><b>📚 Documentação</b><small>Chaves de API, limites, IA local</small></button>
-<a class="b" href="https://discord.gg/g4cW4zRvjf" target="_blank"><b>🎧 Discord</b><small>Suporte e comunidade</small></a>
-<button class="b" data-md="versions"><b>⬇️ Baixar versões</b><small>Escolha a versão: Instalador ou Portable</small></button>
-<button class="b" data-md="news"><b>🆕 Novidades do app</b><small>O que mudou em cada versão</small></button>
+<div class="mu" id="mu"><div><b><span class="mi"><svg viewBox="0 0 24 24" width="20" height="20" fill="none"><path d="M9 18V6.5l10-2V16" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><circle cx="6.5" cy="18" r="2.6" fill="#fff"/><circle cx="16.5" cy="16" r="2.6" fill="#fff"/></svg></span><span data-i="p.music.t"></span><span class="tg" data-i="p.music.new"></span></b><small data-i="p.music.s"></small><div class="pb" id="mu-pb" hidden><i></i></div><small id="mu-st"></small></div><button class="btn pri" id="mu-btn"></button></div>
+<button class="b p" data-open="chat"><b data-i="p.chat"></b><small data-i="p.chat.s"></small></button>
+<button class="b" data-open="local"><b data-i="p.local"></b><small data-i="p.local.s"></small></button>
+<button class="b" data-open="login"><b data-i="p.login"></b><small data-i="p.login.s"></small></button>
+<button class="b" data-open="home"><b data-i="p.home"></b><small data-i="p.home.s"></small></button>
+<button class="b" data-open="ia"><b data-i="p.ia"></b><small data-i="p.ia.s"></small></button>
+<button class="b" data-open="docs"><b data-i="p.docs"></b><small data-i="p.docs.s"></small></button>
+<a class="b" href="https://discord.gg/g4cW4zRvjf" target="_blank"><b data-i="p.discord"></b><small data-i="p.discord.s"></small></a>
+<button class="b" data-md="versions"><b data-i="p.versions"></b><small data-i="p.versions.s"></small></button>
+<button class="b" data-md="news"><b data-i="p.news"></b><small data-i="p.news.s"></small></button>
 </div>
 
-<h2>Configurações do app</h2>
+<h2 data-i="p.set"></h2>
 <div class="c">
-<div class="r"><div>Tema<small>Automático segue o Windows</small></div><div class="seg" id="theme"><button data-v="0">Automático</button><button data-v="1">Claro</button><button data-v="2">Escuro</button></div></div>
-<div class="r"><div>Atalho para abrir o chat<small>Funciona mesmo com o app na bandeja</small></div><label class="sw"><input type="checkbox" id="hk"><span></span></label></div>
-<div class="r"><div>Teclas do atalho<small id="hkinfo"></small></div><select id="preset"></select></div>
-<div class="r"><div>Continuar na bandeja ao fechar<small>O X da janela só esconde o app</small></div><label class="sw"><input type="checkbox" id="tray"><span></span></label></div>
-<div class="r"><div>Ao abrir o app, mostrar</div><select id="start"><option value="0">Este painel</option><option value="1">Site Azul Groove</option><option value="2">Chat com a IA</option></select></div>
-<div class="r"><div>Dados do app<small>Login, cookies e configurações</small></div><button class="btn o" id="data">Abrir pasta</button></div>
+<div class="r"><div><span data-i="p.theme"></span><small data-i="p.theme.s"></small></div><div class="seg" id="theme"><button data-v="0" data-i="p.th.auto"></button><button data-v="1" data-i="p.th.light"></button><button data-v="2" data-i="p.th.dark"></button></div></div>
+<div class="r"><div><span data-i="p.hk"></span><small data-i="p.hk.s"></small></div><label class="sw"><input type="checkbox" id="hk"><span></span></label></div>
+<div class="r"><div><span data-i="p.keys"></span><small id="hkinfo"></small></div><select id="preset"></select></div>
+<div class="r"><div><span data-i="p.tray"></span><small data-i="p.tray.s"></small></div><label class="sw"><input type="checkbox" id="tray"><span></span></label></div>
+<div class="r"><div data-i="p.start"></div><select id="start"><option value="0" data-i="p.st.panel"></option><option value="1" data-i="p.st.site"></option><option value="2" data-i="p.st.chat"></option></select></div>
+<div class="r"><div><span data-i="p.lang"></span><small data-i="p.lang.s"></small></div><select id="lang"></select></div>
+<div class="r"><div><span data-i="p.data"></span><small data-i="p.data.s"></small></div><button class="btn o" id="data" data-i="p.data.b"></button></div>
 </div>
 
-<h2>IA no seu PC</h2>
-<div class="c"><div class="r"><div>Estado da IA<small id="ai-st">Carregando…</small><div class="pb" id="ai-pb" hidden><i></i></div></div><div class="ac" style="margin:0"><button class="btn o" id="ai-stop" hidden>Desligar IA</button><button class="btn" data-open="local">Abrir chat offline</button></div></div></div>
-<div class="seg aitabs" id="aitabs"><button data-t="geral" class="on">⚙️ Geral</button><button data-t="modelos">📦 Modelos</button><button data-t="add">➕ Adicionar</button></div>
+<h2 data-i="p.ai"></h2>
+<div class="c"><div class="r"><div><span data-i="p.ai.state"></span><small id="ai-st" data-i="p.loading"></small><div class="pb" id="ai-pb" hidden><i></i></div></div><div class="ac" style="margin:0"><button class="btn o" id="ai-stop" hidden data-i="p.ai.stop"></button><button class="btn" data-open="local" data-i="p.ai.open"></button></div></div></div>
+<div class="seg aitabs" id="aitabs"><button data-t="geral" class="on" data-i="p.ai.t.gen"></button><button data-t="modelos" data-i="p.ai.t.mod"></button><button data-t="add" data-i="p.ai.t.add"></button></div>
 <div class="aipane" id="aip-geral"><div class="c">
-<div class="r"><div>Usar a placa de vídeo (Vulkan)<small id="ai-vkinfo">Responde mais rápido em PCs com placa de vídeo. Na primeira vez baixa um motor diferente</small></div><label class="sw"><input type="checkbox" id="ai-vk"><span></span></label></div>
-<div class="r"><div>Fechar a IA ao minimizar<small>Libera memória quando o app é minimizado ou vai para a bandeja. A IA liga de novo ao voltar</small></div><label class="sw"><input type="checkbox" id="aimin"><span></span></label></div>
+<div class="r"><div><span data-i="p.ai.vk"></span><small id="ai-vkinfo" data-i="p.ai.vk.s"></small></div><label class="sw"><input type="checkbox" id="ai-vk"><span></span></label></div>
+<div class="r"><div><span data-i="p.ai.min"></span><small data-i="p.ai.min.s"></small></div><label class="sw"><input type="checkbox" id="aimin"><span></span></label></div>
 </div></div>
 <div class="aipane" id="aip-modelos" hidden>
 <p class="ainote" id="ai-ram"></p>
 <div id="ai-list"></div>
 </div>
 <div class="aipane" id="aip-add" hidden><div class="c">
-<div class="r"><div>Baixar outro modelo<small>Cole o link de um arquivo .gguf (ex.: do Hugging Face)</small></div><div class="ac" style="margin:0"><input class="in" id="ai-url" placeholder="https://…/modelo.gguf" spellcheck="false"><button class="btn" id="ai-urlgo">Baixar</button></div></div>
-<div class="r"><div>Já tem um modelo no PC?<small>Importe um arquivo .gguf sem copiar nem baixar de novo</small></div><button class="btn o" id="ai-imp">Importar .gguf</button></div>
+<div class="r"><div><span data-i="p.ai.url"></span><small data-i="p.ai.url.s"></small></div><div class="ac" style="margin:0"><input class="in" id="ai-url" data-ph="p.ai.url.ph" spellcheck="false"><button class="btn" id="ai-urlgo" data-i="p.dl"></button></div></div>
+<div class="r"><div><span data-i="p.ai.imp"></span><small data-i="p.ai.imp.s"></small></div><button class="btn o" id="ai-imp" data-i="p.ai.imp.b"></button></div>
 </div></div>
 <div id="ai-msg"></div>
 
-<h2>Atualizações</h2>
-<div class="c"><div class="r"><div>Versão instalada: <b id="ver2">...</b><small>Confere a última versão publicada no GitHub</small></div><button class="btn pri" id="chk">Verificar agora</button></div></div>
+<h2 data-i="p.upd"></h2>
+<div class="c"><div class="r"><div><span data-i="p.upd.ver"></span> <b id="ver2">...</b><small data-i="p.upd.s"></small></div><button class="btn pri" id="chk"></button></div></div>
 <div id="upd"></div>
 
-<p class="ft">Para fechar de verdade, clique com o botão direito no ícone da bandeja e escolha <b>Sair</b>.<br>Para voltar a este painel: ícone da bandeja → <b>Abrir painel</b>.</p>
+<p class="ft" data-r="p.ft"></p>
 </div>
-<div class="md" id="md" hidden><div class="mc"><div class="mh"><b id="mt"></b><div><button class="btn o" id="gh">Abrir no GitHub</button><button class="btn o" id="mx">Fechar</button></div></div><div id="ml"></div></div></div>
-<div class="md" id="rs" hidden><div class="mc rc"><div class="lg" style="margin:0 auto"><i></i><i></i><i></i><i></i><i></i></div><h3>Atualização pronta</h3><p>O app será reiniciado em <b id="cd">5</b> segundos para concluir a instalação.</p></div></div>
+<div class="md" id="md" hidden><div class="mc"><div class="mh"><b id="mt"></b><div><button class="btn o" id="gh" data-i="p.gh"></button><button class="btn o" id="mx" data-i="p.close"></button></div></div><div id="ml"></div></div></div>
+<div class="md" id="rs" hidden><div class="mc rc"><div class="lg" style="margin:0 auto"><i></i><i></i><i></i><i></i><i></i></div><h3 data-i="p.rs.t"></h3><p id="rsp"></p></div></div>
 <script>
 const $=s=>document.querySelector(s), send=m=>chrome.webview.postMessage(m);
+// ---- idioma: os textos chegam prontos do app (T) já no idioma escolhido; {0}, {1}... são preenchidos aqui ----
+const T=@T@;
+const t=(k,...a)=>(T[k]!=null?T[k]:k).replace(/\{(\d+)\}/g,(m,i)=>a[i]!=null?a[i]:m);
 document.querySelectorAll('[data-open]').forEach(b=>b.onclick=()=>send('panel:open:'+b.dataset.open));
 document.querySelectorAll('[data-ext]').forEach(b=>b.onclick=()=>send('panel:ext:'+b.dataset.ext));
 document.querySelectorAll('#theme button').forEach(b=>b.onclick=()=>{send('panel:set:theme:'+b.dataset.v);mark(+b.dataset.v)});
@@ -571,7 +596,14 @@ $('#preset').onchange=e=>send('panel:set:preset:'+e.target.value);
 $('#start').onchange=e=>send('panel:set:start:'+e.target.value);
 $('#aimin').onchange=e=>send('panel:set:aimin:'+(e.target.checked?1:0));
 $('#data').onclick=()=>send('panel:data');
-const el=(t,c,x)=>{const e=document.createElement(t);if(c)e.className=c;if(x!=null)e.textContent=x;return e};
+const el=(n,c,x)=>{const e=document.createElement(n);if(c)e.className=c;if(x!=null)e.textContent=x;return e};
+@DD_HELPER@
+// texto com só <b>…</b> e <br> permitidos (montado com DOM, sem innerHTML)
+function rich(e,s){e.textContent='';let b=null;String(s).split(/(<\/?b>|<br>)/).forEach(p=>{if(p==='<b>')b=el('b');else if(p==='</b>'){if(b)e.appendChild(b);b=null}else if(p==='<br>')e.appendChild(document.createElement('br'));else if(p)(b||e).appendChild(document.createTextNode(p))});if(b)e.appendChild(b)}
+document.title=t('p.title');
+document.querySelectorAll('[data-i]').forEach(e=>e.textContent=t(e.dataset.i));
+document.querySelectorAll('[data-ph]').forEach(e=>e.placeholder=t(e.dataset.ph));
+document.querySelectorAll('[data-r]').forEach(e=>rich(e,t(e.dataset.r)));
 // Lista suspensa própria (a lista nativa do Windows ignora o tema escuro). Usada também pelo bloco Beta.
 function ddify(sel){
  sel.style.display='none';
@@ -579,79 +611,80 @@ function ddify(sel){
  const sync=()=>{l.textContent='';Array.from(sel.options).forEach(o=>{const d=el('div','ddo'+(o.value===sel.value?' sel':''),o.textContent);
   d.onclick=ev=>{ev.stopPropagation();sel.value=o.value;w.classList.remove('open');sync();sel.dispatchEvent(new Event('change'))};l.appendChild(d)});
   const cur=sel.options[sel.selectedIndex];b.textContent=cur?cur.textContent:''};
- b.onclick=ev=>{ev.stopPropagation();const open=w.classList.contains('open');document.querySelectorAll('.dd.open').forEach(x=>x.classList.remove('open'));w.classList.toggle('open',!open)};
- sel.sync=sync;sync();return w}
+ b.onclick=ev=>{ev.stopPropagation();const open=w.classList.contains('open');document.querySelectorAll('.dd.open').forEach(x=>x.classList.remove('open'));w.classList.toggle('open',!open);if(!open)fitDropdown(w,l,260)};
+ sel.sync=sync;sync();wireDropdownKeyboard(w,b,l);return w}
 document.addEventListener('click',()=>document.querySelectorAll('.dd.open').forEach(x=>x.classList.remove('open')));
-ddify($('#preset'));ddify($('#start'));
+ddify($('#preset'));ddify($('#start'));ddify($('#lang'));
+$('#lang').onchange=e=>send('panel:lang:'+e.target.value);
 document.querySelectorAll('[data-md]').forEach(b=>b.onclick=()=>openMd(b.dataset.md));
-function openMd(mode){$('#mt').textContent=mode==='news'?'🆕 Novidades do app':'⬇️ Baixar versões';$('#ml').textContent='Carregando...';$('#md').hidden=false;send('panel:'+mode)}
+function openMd(mode){$('#mt').textContent=t(mode==='news'?'p.news':'p.versions');$('#ml').textContent=t('p.loading');$('#md').hidden=false;send('panel:'+mode)}
 $('#mx').onclick=()=>$('#md').hidden=true;
 $('#gh').onclick=()=>send('panel:ext:releases');
 function showRel(d){const box=$('#ml');box.textContent='';
- if(d.err||!d.items.length){box.textContent=d.err?'Não foi possível carregar agora. Confira sua internet e tente de novo.':'Ainda não há versões publicadas.';return}
+ if(d.err||!d.items.length){box.textContent=t(d.err?'p.rel.err':'p.rel.none');return}
  d.items.forEach((it,i)=>{const c=el('div','rl'),h=el('h4');
   h.appendChild(el('span','',it.title+(it.version&&it.title.indexOf(it.version)<0?' ('+it.version+')':'')));
-  if(it.current)h.appendChild(el('span','tg','instalada'));if(it.pre)h.appendChild(el('span','tg','pré-lançamento'));if(it.date)h.appendChild(el('small','',it.date));
+  if(it.current)h.appendChild(el('span','tg',t('p.tag.inst')));if(it.pre)h.appendChild(el('span','tg',t('p.tag.pre')));if(it.date)h.appendChild(el('small','',it.date));
   c.appendChild(h);
-  if(it.body)c.appendChild(el('pre','',it.body));else if(d.mode==='news')c.appendChild(el('pre','','Sem notas nesta versão.'));
+  if(it.body)c.appendChild(el('pre','',it.body));else if(d.mode==='news')c.appendChild(el('pre','',t('p.rel.nonotes')));
   if(d.mode==='versions'){const a=el('div','ac');
-   if(it.setup){const b=el('button','btn','⬇️ Instalador');b.onclick=()=>send('panel:dl:'+i+':setup');a.appendChild(b)}
-   if(it.portable){const b=el('button','btn o','⬇️ Portable');b.onclick=()=>send('panel:dl:'+i+':portable');a.appendChild(b)}
-   if(!it.setup&&!it.portable)a.appendChild(el('small','','Sem arquivos para baixar nesta versão.'));
+   if(it.setup){const b=el('button','btn',t('p.rel.setup'));b.onclick=()=>send('panel:dl:'+i+':setup');a.appendChild(b)}
+   if(it.portable){const b=el('button','btn o',t('p.rel.port'));b.onclick=()=>send('panel:dl:'+i+':portable');a.appendChild(b)}
+   if(!it.setup&&!it.portable)a.appendChild(el('small','',t('p.rel.nofiles')));
    c.appendChild(a)}
   box.appendChild(c)})}
 const IC_R='<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>';
 const IC_D='<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 10l5 5 5-5M4 21h16"/></svg>';
 function setChk(ic,t,spin,dis){const c=$('#chk');c.innerHTML=ic+'<span>'+t+'</span>';c.classList.toggle('spin',!!spin);c.disabled=!!(spin||dis)}
-setChk(IC_R,'Verificar agora');
-$('#chk').onclick=()=>{setChk(IC_R,'Verificando\u2026',true);$('#upd').className='';$('#upd').textContent='Procurando uma versão nova\u2026';send('panel:update')};
+setChk(IC_R,t('p.chk'));
+$('#chk').onclick=()=>{setChk(IC_R,t('p.chking'),true);$('#upd').className='';$('#upd').textContent=t('p.searching');send('panel:update')};
 
 // ---- IA no seu PC (tudo configurado aqui; o chat offline só conversa) ----
 const ai={s:null,dl:null};
 const sendAi=(n,a)=>send('panel:ai:'+n+':'+(a||''));
-const gbTxt=n=>n>=1?n.toFixed(1).replace('.',',')+' GB':Math.max(1,Math.round(n*1024))+' MB';
+const gbTxt=n=>n>=1?n.toLocaleString(document.documentElement.lang||undefined,{minimumFractionDigits:1,maximumFractionDigits:1})+' GB':Math.max(1,Math.round(n*1024))+' MB';
 const mb=n=>(n/1048576).toFixed(0);
 function renderAiStatus(){const s=ai.s;if(!s)return;
  const act=s.items.find(i=>i.id===s.active),run=s.items.find(i=>i.id===s.running);
  const busy=s.phase==='download'||s.phase==='extract'||s.phase==='load';
- let t;
- if(busy)t='⏳ '+s.text+(s.phase==='download'&&s.pct?' '+s.pct+'%':'');
- else if(s.phase==='error')t='⚠️ '+s.text;
- else if(run)t='🟢 Ligada: '+run.name;
- else if(act)t='⚪ Desligada ('+act.name+' é a escolhida). Liga sozinha quando você conversar.';
- else t='Nenhuma IA escolhida ainda. Baixe uma abaixo.';
- $('#ai-st').textContent=t;
+ let msg;
+ if(busy)msg='⏳ '+s.text+(s.phase==='download'&&s.pct?' '+s.pct+'%':'');
+ else if(s.phase==='error')msg='⚠️ '+s.text;
+ else if(run)msg=t('p.ai.on',run.name);
+ else if(act)msg=t('p.ai.off',act.name);
+ else msg=t('p.ai.none');
+ $('#ai-st').textContent=msg;
  const pb=$('#ai-pb');pb.hidden=!(busy&&(s.phase==='download'||s.phase==='extract'));pb.firstChild.style.width=(s.pct||0)+'%';
  $('#ai-stop').hidden=!run;
 }
 function renderAi(){const s=ai.s;if(!s)return;
  renderAiStatus();
  $('#ai-vk').checked=!!s.vulkan;
- $('#ai-vkinfo').textContent=s.engineReady?'Motor '+(s.vulkan?'Vulkan':'CPU')+' já instalado neste PC':'Responde mais rápido em PCs com placa de vídeo. Na primeira vez baixa um motor diferente';
- $('#ai-ram').textContent='Seu PC tem cerca de '+s.ramGb+' GB de RAM. O modelo marcado como recomendado é o que melhor combina com ele. Depois de baixados, motor e modelo funcionam sem internet.';
+ $('#ai-vkinfo').textContent=s.engineReady?t('p.ai.vk.in',s.vulkan?'Vulkan':'CPU'):t('p.ai.vk.s');
+ $('#ai-ram').textContent=t('p.ai.ram',s.ramGb);
  const box=$('#ai-list');box.textContent='';
  s.items.forEach(i=>{
   const c=el('div','mdl'+(i.id===s.active&&i.have?' use':'')),h=el('h4');
   h.appendChild(el('span','',i.name));
-  if(i.rec)h.appendChild(el('span','tg','recomendado'));
-  if(i.id===s.active&&i.have)h.appendChild(el('span','tg','em uso'));
+  if(i.rec)h.appendChild(el('span','tg',t('p.tag.rec')));
+  if(i.id===s.active&&i.have)h.appendChild(el('span','tg',t('p.tag.use')));
   c.appendChild(h);c.appendChild(el('p','',i.desc));
-  const m=[];m.push(i.have?'No PC':'Download de '+gbTxt(i.gb));if(i.ram)m.push('pede ~'+i.ram+' GB de RAM');if(i.lic)m.push(i.lic);
+  const m=[];m.push(i.have?t('p.m.have'):t('p.m.dl',gbTxt(i.gb)));if(i.ram)m.push(t('p.m.ram',i.ram));if(i.lic)m.push(i.lic);
   c.appendChild(el('div','meta',m.join(' · ')));
   const a=el('div','ac'),other=!!s.dl&&s.dl!==i.id;
   if(s.dl===i.id){
    const pb=el('div','pb'),bar=el('i');bar.id='dlbar';pb.appendChild(bar);pb.style.flex='1';pb.style.minWidth='140px';
    const d=ai.dl&&ai.dl.id===i.id?ai.dl:null;bar.style.width=d&&d.total?Math.min(100,d.got*100/d.total)+'%':'0';
-   a.appendChild(pb);const tx=el('small','',d&&d.total?mb(d.got)+' / '+mb(d.total)+' MB':'Baixando…');tx.id='dltxt';a.appendChild(tx);
-   const x=el('button','btn o','Cancelar');x.onclick=()=>sendAi('mdl_cancel');a.appendChild(x);
+   a.appendChild(pb);const tx=el('small','',d&&d.total?mb(d.got)+' / '+mb(d.total)+' MB':t('p.downloading'));tx.id='dltxt';a.appendChild(tx);
+   const x=el('button','btn o',t('p.cancel'));x.onclick=()=>sendAi('mdl_cancel');a.appendChild(x);
   }else if(i.have){
-   if(i.id!==s.active){const u=el('button','btn','Usar este');u.onclick=()=>sendAi('mdl_use',i.id);a.appendChild(u)}
-   const x=el('button','btn o dg',i.custom?'Remover':'Apagar');x.onclick=()=>{if(confirm((i.custom?'Remover ':'Apagar ')+i.name+'?'))sendAi('mdl_del',i.id)};a.appendChild(x);
+   if(i.id!==s.active){const u=el('button','btn',t('p.use'));u.onclick=()=>sendAi('mdl_use',i.id);a.appendChild(u)}
+   const x=el('button','btn o dg',t(i.custom?'p.rm':'p.del'));x.onclick=()=>{if(confirm(t(i.custom?'p.rm.q':'p.del.q',i.name)))sendAi('mdl_del',i.id)};a.appendChild(x);
   }else{
-   const u=el('button','btn','Baixar e usar');u.disabled=other||!s.online;u.onclick=()=>sendAi('mdl_dluse',i.id);a.appendChild(u);
-   const o=el('button','btn o','Só baixar');o.disabled=other||!s.online;o.onclick=()=>sendAi('mdl_dl',i.id);a.appendChild(o);
-   if(i.custom){const x=el('button','btn o dg','Remover');x.onclick=()=>sendAi('mdl_del',i.id);a.appendChild(x)}
-   if(!s.online)a.appendChild(el('small','','Sem internet agora'));
+   const u=el('button','btn',t('p.dluse'));u.disabled=other||!s.online;u.onclick=()=>sendAi('mdl_dluse',i.id);a.appendChild(u);
+   const o=el('button','btn o',t('p.dlonly'));o.disabled=other||!s.online;o.onclick=()=>sendAi('mdl_dl',i.id);a.appendChild(o);
+   if(i.custom){const x=el('button','btn o dg',t('p.rm'));x.onclick=()=>sendAi('mdl_del',i.id);a.appendChild(x)}
+   if(!s.online)a.appendChild(el('small','',t('p.offnow')));
   }
   c.appendChild(a);box.appendChild(c)})}
 function aiTab(t){document.querySelectorAll('#aitabs button').forEach(b=>b.classList.toggle('on',b.dataset.t===t));
@@ -669,19 +702,37 @@ $('#ai-stop').onclick=()=>sendAi('mdl_stop');
 $('#ai-imp').onclick=()=>sendAi('mdl_import');
 $('#ai-urlgo').onclick=()=>{const v=$('#ai-url').value.trim();if(!v)return;sendAi('mdl_url',v);$('#ai-url').value='';aiTab('modelos')};
 $('#ai-url').onkeydown=e=>{if(e.key==='Enter')$('#ai-urlgo').click()};
+const muB=$('#mu-btn'),muS=$('#mu-st'),muP=$('#mu-pb');let muOn=false;
+function muLabel(){const P='<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.5-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5z"/></svg>',D='<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7 10.5l5 5 5-5M5 20h14"/></svg>';muB.innerHTML=(muOn?P:D)+'<span></span>';muB.lastChild.textContent=t(muOn?'p.music.open':'p.music.install')}
+function muBar(p){muP.hidden=p==null;if(p!=null)muP.firstChild.style.width=p+'%'}
+function muMsg(d){
+ if(d.installed!=null)muOn=!!d.installed;
+ const ph=d.phase;muS.className='';
+ if(ph==='init'||ph==='done'){muB.disabled=false;muBar(null);muS.textContent='';muLabel()}
+ else if(ph==='err'){muB.disabled=false;muBar(null);muS.className='er';muS.textContent=d.msg||t('p.music.err');muLabel()}
+ else{muB.disabled=true;
+  if(ph==='check'){muS.textContent=t('p.music.check');muBar(null)}
+  else if(ph==='download'){muS.textContent=t('p.music.dl',d.percent);muBar(d.percent)}
+  else if(ph==='install'){muS.textContent=t('p.music.inst');muBar(100)}
+  else if(ph==='launch'){muS.textContent=t('p.music.launch');muBar(100)}}
+}
+muB.onclick=()=>{muB.disabled=true;send('panel:music:go')};muLabel();
 chrome.webview.addEventListener('message',e=>{const d=e.data;
  if(d.type==='lai'){laiMsg(d.fn,d.data);return}
- if(d.type==='state'){$('#ver').textContent=$('#ver2').textContent=d.version;mark(d.theme);$('#hk').checked=d.hotkeyOn;$('#tray').checked=d.tray;$('#start').value=d.start;$('#start').sync();$('#aimin').checked=!!d.aiMin;if(d.news)openMd('news');
+ if(d.type==='music'){muMsg(d);return}
+ if(d.type==='state'){$('#ver').textContent=$('#ver2').textContent=d.displayVersion||d.version;mark(d.theme);$('#hk').checked=d.hotkeyOn;$('#tray').checked=d.tray;$('#start').value=d.start;$('#start').sync();$('#aimin').checked=!!d.aiMin;if(d.news)openMd('news');
   $('#preset').innerHTML=d.presets.map((p,i)=>'<option value="'+i+'">'+p+'</option>').join('');$('#preset').value=d.preset;$('#preset').sync();
-  $('#hkinfo').textContent=!d.hotkeyOn?'':d.hotkeyOk?'Ativo: '+d.hotkeyLabel:'⚠️ Outro programa já usa esta combinação. Escolha outra.'}
- if(d.type==='progress'){setChk(IC_D,'Baixando\u2026 '+d.percent+'%',false,true);$('#upd').className='upnew';$('#upd').innerHTML='⬇️ Baixando a atualização… <b>'+d.percent+'%</b>'}
- if(d.type==='restart'){$('#upd').textContent='';$('#rs').hidden=false;let s=d.seconds;$('#cd').textContent=s;const t=setInterval(()=>{s--;$('#cd').textContent=Math.max(s,0);if(s<=0)clearInterval(t)},1000)}
+  {const s=$('#lang');s.textContent='';[['auto',t('p.lang.auto')]].concat(d.langs.map(l=>[l.code,l.name])).forEach(x=>{const o=document.createElement('option');o.value=x[0];o.textContent=x[1];s.appendChild(o)});s.value=d.lang;s.sync()}
+  $('#hkinfo').textContent=!d.hotkeyOn?'':d.hotkeyOk?t('p.hk.on',d.hotkeyLabel):t('p.hk.bad')}
+ if(d.type==='progress'){setChk(IC_D,t('p.dling',d.percent),false,true);$('#upd').className='upnew';rich($('#upd'),t('p.upd.dl',d.percent))}
+ if(d.type==='restart'){$('#upd').textContent='';$('#rs').hidden=false;let s=d.seconds;const show=n=>$('#rsp').textContent=t('p.rs.p',Math.max(n,0));show(s);const tm=setInterval(()=>{s--;show(s);if(s<=0)clearInterval(tm)},1000)}
  if(d.type==='releases')showRel(d);
- if(d.type==='update'){const u=$('#upd'),l=d.url?' <a class="btn" href="'+d.url+'" target="_blank">'+(d.status==='new'?'Baixar a nova versão':'Abrir página')+'</a>':'';
+ if(d.type==='update'){const u=$('#upd');
   u.className=d.status==='new'?'upnew':d.status==='ok'?'upok':d.status==='err'?'uperr':'';
-  if(d.status==='new'&&d.auto)setChk(IC_D,'Baixando\u2026',false,true);else if(d.status==='err')setChk(IC_R,'Tentar de novo');else setChk(IC_R,'Verificar de novo');
-  u.innerHTML=d.status==='new'?'🎉 <b>Nova versão '+d.latest+' disponível</b> (você tem '+d.current+'). '+(d.msg||'')+(d.auto?'':l)
-   :d.status==='ok'?'✅ <b>Você está na versão mais recente</b> ('+d.current+').':(d.msg||'')+l}});
+  if(d.status==='new'&&d.auto)setChk(IC_D,t('p.downloading'),false,true);else if(d.status==='err')setChk(IC_R,t('p.retry'));else setChk(IC_R,t('p.chk.again'));
+  rich(u,d.status==='new'?t('p.upd.new',d.latest,d.current)+(d.msg||''):d.status==='ok'?t('p.upd.ok',d.current):(d.msg||''));
+  if(d.url&&(d.status==='new'?!d.auto:d.status!=='ok')){const a=el('a','btn',t(d.status==='new'?'p.upd.get':'p.upd.page'));a.href=d.url;a.target='_blank';u.appendChild(document.createTextNode(' '));u.appendChild(a)}}});
+document.addEventListener('visibilitychange',()=>document.documentElement.classList.toggle('hid',document.hidden));
 send('panel:get');sendAi('aistate');
 </script></body></html>
 """;

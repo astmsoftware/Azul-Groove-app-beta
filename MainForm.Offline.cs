@@ -48,7 +48,7 @@ public partial class MainForm
     // ================= Menu da bandeja =================
     ToolStripMenuItem OfflineMenuItem()
     {
-        miOffline = new ToolStripMenuItem("Modo offline (sem internet)") { CheckOnClick = true, Checked = cfg.OfflineMode };
+        miOffline = new ToolStripMenuItem(Tr("b.off")) { CheckOnClick = true, Checked = cfg.OfflineMode };
         miOffline.Click += (_, _) => SetOfflineMode(miOffline.Checked);
         return miOffline;
     }
@@ -109,7 +109,10 @@ public partial class MainForm
         var html = OfflineHtml
             .Replace("@TITLE@", OfflineTitle)
             .Replace("@MODE@", cfg.OfflineMode ? "manual" : "auto")
-            .Replace("@NOTE@", note);
+            .Replace("@NOTE@", note)
+            .Replace("@LANG@", LangCode)
+            .Replace("@DIR@", I18nList().FirstOrDefault(x => x.Code.Equals(LangCode, StringComparison.OrdinalIgnoreCase)).Rtl ? "rtl" : "ltr")
+            .Replace("@T@", TextsJson("off."));
         cw.NavigateToString(html);
     }
 
@@ -169,7 +172,7 @@ public partial class MainForm
             }
             else if (!OnOfflinePage)
             {
-                await OfflineToastAsync("Sem conexão com a internet — reconectando quando voltar…");
+                await OfflineToastAsync(Tr("off.reconnecting"));
             }
         });
     }
@@ -192,7 +195,7 @@ public partial class MainForm
                 }
                 if (silent) await Task.Delay(2500);
             }
-            if (!silent) await OfflinePageStatusAsync("Ainda sem conexão. Verifique o Wi‑Fi ou o cabo e tente de novo.");
+            if (!silent) await OfflinePageStatusAsync(Tr("off.still"));
             return false;
         }
         finally { reconnecting = false; }
@@ -258,7 +261,7 @@ public partial class MainForm
 
     // ================= Design da tela offline =================
     const string OfflineHtml = """
-<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>@TITLE@</title><meta name="color-scheme" content="dark light"><style>
+<!doctype html><html lang="@LANG@" dir="@DIR@"><head><meta charset="utf-8"><title>@TITLE@</title><meta name="color-scheme" content="dark light"><style>
 :root{--bg:#0a0c13;--card:rgba(20,23,36,.62);--bd:rgba(255,255,255,.13);--tx:#f3f5fb;--mu:#a3abc0;--ac:#6d7cff;--ac2:#9a6bff;--in:rgba(255,255,255,.08);--bl:.6}
 @media (prefers-color-scheme:light){:root{--bg:#eaeefb;--card:rgba(255,255,255,.66);--bd:rgba(0,0,0,.08);--tx:#151823;--mu:#5b6277;--in:rgba(0,0,0,.05);--bl:.45}}
 *{box-sizing:border-box}
@@ -296,30 +299,32 @@ button.gh:hover{background:rgba(127,127,127,.22)}
  <div class="ico"><svg viewBox="0 0 24 24" width="38" height="38" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 8.8a15 15 0 0 1 4.2-2.5"/><path d="M22 8.8a15 15 0 0 0-9.4-3.7"/><path d="M5 12.9a10 10 0 0 1 3.4-2.1"/><path d="M19 12.9a10 10 0 0 0-4-2.4"/><path d="M8.5 16.4a5 5 0 0 1 7 0"/><path d="M12 20h.01"/><path d="M3 3l18 18"/></svg></div>
  <h1 id="t"></h1><p class="sub" id="u"></p>
  <div class="list">
-  <div>✅  Painel, configurações e atalhos</div>
-  <div>✅  Tema claro / escuro</div>
-  <div>✅  Chat offline com IA no seu PC (Ollama, LM Studio, Jan…)</div>
-  <div class="no">🌐  Chat e login precisam de internet</div>
+  <div>✅  <span data-i18n="off.panel"></span></div>
+  <div>✅  <span data-i18n="off.theme"></span></div>
+  <div>✅  <span data-i18n="off.local"></span> (Ollama, LM Studio, Jan…)</div>
+  <div class="no">🌐  <span data-i18n="off.need"></span></div>
  </div>
  <p class="st" id="st">@NOTE@</p>
  <div class="btns">
-  <button class="pri" id="retry">Tentar novamente</button>
-  <button class="pri" id="online">Desativar modo offline</button>
-  <button class="gh" id="panel">Abrir painel</button>
-  <button class="gh" id="lchat">Chat offline</button>
+  <button class="pri" id="retry" data-i18n="off.retry"></button>
+  <button class="pri" id="online" data-i18n="off.disable"></button>
+  <button class="gh" id="panel" data-i18n="off.openPanel"></button>
+  <button class="gh" id="lchat" data-i18n="off.openChat"></button>
  </div>
 </div></div>
 <script>
 var $=function(i){return document.getElementById(i)};
+var T=@T@;function t(k){return T[k]||k}
+document.querySelectorAll('[data-i18n]').forEach(function(e){e.textContent=t(e.dataset.i18n)});
 var manual=document.body.getAttribute('data-mode')==='manual';
 function send(m){try{window.chrome.webview.postMessage(m)}catch(e){}}
 function status(m){var s=$('st');s.textContent=m;s.style.opacity=1}
-$('t').textContent=manual?'Modo offline ativado':'Você está sem internet';
-$('u').textContent=manual?'O app não está usando a internet. Desative o modo offline quando quiser voltar ao chat.':'Reconectamos sozinhos assim que a conexão voltar. Enquanto isso, o painel continua funcionando.';
+$('t').textContent=t(manual?'off.manual':'off.auto');
+$('u').textContent=t(manual?'off.manual.sub':'off.auto.sub');
 $('retry').style.display=manual?'none':'';
 $('online').style.display=manual?'':'none';
-$('retry').onclick=function(){var b=this;b.disabled=true;status('Verificando a conexão…');send('offline:retry');setTimeout(function(){b.disabled=false},3500)};
-$('online').onclick=function(){status('Reconectando…');send('offline:online')};
+$('retry').onclick=function(){var b=this;b.disabled=true;status(t('off.check'));send('offline:retry');setTimeout(function(){b.disabled=false},3500)};
+$('online').onclick=function(){status(t('off.reconnect'));send('offline:online')};
 $('panel').onclick=function(){send('offline:panel')};
 $('lchat').onclick=function(){send('offline:chat')};
 if($('st').textContent)$('st').style.opacity=1;
